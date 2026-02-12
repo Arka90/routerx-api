@@ -6,6 +6,7 @@ import { registerWebhook } from "./webhook";
 const app = express();
 app.use(express.json());
 registerWebhook(app);
+console.log("deploy test");
 
 
 /* health check */
@@ -79,6 +80,5 @@ app.get("/watch", (req, res) => {
 });
 
 app.listen(5001, () => {
-  console.log("deploy test");
   console.log("RouteRx running on port 5001");
 });
