@@ -4,7 +4,6 @@ import { addWatch, listWatch } from "./monitor";
 
 const app = express();
 app.use(express.json());
-console.log("deploy test");
 
 
 /* health check */
