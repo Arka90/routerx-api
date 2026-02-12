@@ -79,5 +79,6 @@ app.get("/watch", (req, res) => {
 });
 
 app.listen(5001, () => {
+  console.log("deploy test");
   console.log("RouteRx running on port 5001");
 });
