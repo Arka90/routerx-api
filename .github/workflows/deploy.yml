@@ -1,0 +1,23 @@
+name: Deploy RouteRx
+
+on:
+  push:
+    branches: [ master, main ]
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: Deploy to VPS
+      uses: appleboy/ssh-action@v1.0.3
+      with:
+        host: ${{ secrets.SERVER_IP }}
+        username: root
+        key: ${{ secrets.SERVER_SSH_KEY }}
+        script: |
+          cd ~/apps/routerx-api
+          git pull origin master
+          npm install
+          npm run build
+          pm2 restart routerx
