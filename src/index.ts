@@ -1,11 +1,9 @@
 import express from "express";
 import { probeDNS, probeTCP, probeTLS, probeHTTP } from "./probe";
 import { addWatch, listWatch } from "./monitor";
-import { registerWebhook } from "./webhook";
 
 const app = express();
 app.use(express.json());
-registerWebhook(app);
 console.log("deploy test");
 
 
