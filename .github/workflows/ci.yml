@@ -42,4 +42,4 @@ jobs:
             git pull origin master
             npm ci
             npm run build
-            pm2 restart routerx-api
+            pm2 restart routerx
