@@ -1,12 +1,11 @@
-import { probeHTTP } from "./probe";
+import { probeHTTP } from "../../domain/probe";
 
 type Status = "UP" | "DOWN";
 
 const state: Record<string, Status> = {};
 const timers: Record<string, NodeJS.Timeout> = {};
 
-/* start monitoring */
-export function addWatch(url: string, interval = 60000) {
+export function startMonitoring(url: string, interval = 60000) {
   if (timers[url]) {
     return { message: "Already monitoring" };
   }
@@ -44,7 +43,6 @@ export function addWatch(url: string, interval = 60000) {
   return { message: "Monitoring started" };
 }
 
-/* list all */
-export function listWatch() {
+export function getMonitors() {
   return state;
 }
