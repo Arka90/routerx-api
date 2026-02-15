@@ -34,7 +34,6 @@ export async function runFullProbe(url: string) {
     tls: tlsResult?.time,
     ttfb: httpResult?.ttfb,
     statusCode: httpResult?.statusCode,
-    success: true
   });
 
   return {

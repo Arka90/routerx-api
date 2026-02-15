@@ -10,7 +10,7 @@ describe("Network Diagnosis", () => {
       tls: null,
       ttfb: null,
       statusCode: null,
-      success: false
+      
     });
 
     expect(result.reason).toBe("DNS_FAILURE");
@@ -23,7 +23,7 @@ describe("Network Diagnosis", () => {
       tls: 80,
       ttfb: 120,
       statusCode: 500,
-      success: true
+    
     });
 
     expect(result.reason).toBe("SERVER_ERROR");
@@ -36,7 +36,7 @@ describe("Network Diagnosis", () => {
       tls: 80,
       ttfb: 2500,
       statusCode: 200,
-      success: true
+
     });
 
     expect(result.reason).toBe("BACKEND_LATENCY");

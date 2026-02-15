@@ -1,9 +1,13 @@
 import { Router } from "express";
-import { startMonitorController, getMonitorsController } from "./monitor.controller";
+import { requireAuth } from "../auth/auth.middleware";
+import { addMonitor, listMonitors, updateMonitorHandler, deleteMonitorHandler, getMonitorHandler } from "./monitor.controller";
 
 const router = Router();
 
-router.post("/", startMonitorController);
-router.get("/", getMonitorsController);
+router.post("/", requireAuth, addMonitor);
+router.get("/", requireAuth, listMonitors);
+router.get("/:id", requireAuth, getMonitorHandler);
+router.patch("/:id", requireAuth, updateMonitorHandler);
+router.delete("/:id", requireAuth, deleteMonitorHandler);
 
 export default router;

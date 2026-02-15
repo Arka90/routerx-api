@@ -26,20 +26,39 @@ jobs:
         run: npm test
 
 
-  deploy:
-    needs: test
-    runs-on: ubuntu-latest
+deploy:
+  needs: test
+  runs-on: ubuntu-latest
 
-    steps:
-      - name: Deploy to VPS
-        uses: appleboy/ssh-action@v1.0.3
-        with:
-          host: ${{ secrets.SERVER_IP }}
-          username: deploy
-          key: ${{ secrets.SERVER_SSH_KEY }}
-          script: |
-            cd ~/apps/routerx-api
-            git pull origin master
-            npm ci
-            npm run build
-            pm2 restart routerx
+  steps:
+    - name: Deploy to VPS
+      uses: appleboy/ssh-action@v1.0.3
+      env:
+        SMTP_HOST: ${{ secrets.SMTP_HOST }}
+        SMTP_PORT: ${{ secrets.SMTP_PORT }}
+        SMTP_USER: ${{ secrets.SMTP_USER }}
+        SMTP_PASS: ${{ secrets.SMTP_PASS }}
+        ALERT_FROM: ${{ secrets.ALERT_FROM }}
+        GENERAL_FROM: ${{ secrets.GENERAL_FROM }}
+
+      with:
+        host: ${{ secrets.SERVER_IP }}
+        username: deploy
+        key: ${{ secrets.SERVER_SSH_KEY }}
+        script: |
+          cd ~/apps/routerx-api
+
+          # Create .env on the server dynamically
+          cat > .env << EOF
+          SMTP_HOST=$SMTP_HOST
+          SMTP_PORT=$SMTP_PORT
+          SMTP_USER=$SMTP_USER
+          SMTP_PASS=$SMTP_PASS
+          ALERT_FROM=$ALERT_FROM
+          GENERAL_FROM=$GENERAL_FROM
+          EOF
+
+          git pull origin master
+          npm ci
+          npm run build
+          pm2 restart routerx

@@ -4,7 +4,6 @@ export type ProbeResult = {
   tls?: number | null;
   ttfb?: number | null;
   statusCode?: number | null;
-  success: boolean;
 };
 
 export function analyze(result: ProbeResult) {
