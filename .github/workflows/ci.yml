@@ -66,7 +66,7 @@ jobs:
             git clean -fd
 
             echo "---- INSTALL ----"
-            npm ci --omit=dev
+            npm ci
 
             echo "---- BUILD ----"
             npm run build
