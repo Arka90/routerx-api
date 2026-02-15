@@ -58,7 +58,18 @@ jobs:
             GENERAL_FROM=$GENERAL_FROM
             EOF
 
-            git pull origin master
-            npm ci
+            set -e
+
+            echo "---- SYNC REPOSITORY ----"
+            git fetch --all
+            git reset --hard origin/master
+            git clean -fd
+
+            echo "---- INSTALL ----"
+            npm ci --omit=dev
+
+            echo "---- BUILD ----"
             npm run build
-            pm2 restart routerx
+
+            echo "---- RELOAD PM2 ----"
+            pm2 reload routerx --update-env
