@@ -71,5 +71,8 @@ jobs:
             echo "---- BUILD ----"
             npm run build
 
+            echo "---- COPY .env ----"
+            cp .env ./dist/.env
+
             echo "---- RELOAD PM2 ----"
             pm2 reload routerx --update-env
