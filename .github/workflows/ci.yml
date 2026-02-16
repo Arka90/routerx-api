@@ -48,16 +48,6 @@ jobs:
           script: |
             cd ~/apps/routerx-api
 
-            # Create .env on the server dynamically
-            cat > .env << EOF
-            SMTP_HOST=$SMTP_HOST
-            SMTP_PORT=$SMTP_PORT
-            SMTP_USER=$SMTP_USER
-            SMTP_PASS=$SMTP_PASS
-            ALERT_FROM=$ALERT_FROM
-            GENERAL_FROM=$GENERAL_FROM
-            EOF
-
             set -e
 
             echo "---- SYNC REPOSITORY ----"
@@ -70,6 +60,16 @@ jobs:
 
             echo "---- BUILD ----"
             npm run build
+
+            # Create .env on the server dynamically (after git reset so it doesn't get wiped)
+            cat > .env << EOF
+            SMTP_HOST=$SMTP_HOST
+            SMTP_PORT=$SMTP_PORT
+            SMTP_USER=$SMTP_USER
+            SMTP_PASS=$SMTP_PASS
+            ALERT_FROM=$ALERT_FROM
+            GENERAL_FROM=$GENERAL_FROM
+            EOF
 
             echo "---- COPY .env ----"
             cp .env ./dist/.env
