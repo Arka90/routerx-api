@@ -2,6 +2,7 @@ import { Worker, Job } from "bullmq";
 import { runFullProbe } from "../modules/probe/probe.service";
 import { db } from "../core/db/client";
 import { sendAlert } from "../modules/notifications/notifier";
+import { openIncident, resolveIncident } from "../modules/incident/incident.service";
 import { connectionOptions } from "../core/queue/redis";
 
 /**
@@ -58,6 +59,9 @@ const worker = new Worker(
       if (failures >= FAILURE_THRESHOLD && confirmedStatus !== "DOWN") {
         confirmedStatus = "DOWN";
 
+        // 🔴 Record incident start
+        openIncident(monitorId);
+
         console.log(`🚨 CONFIRMED DOWN: ${url}`);
 
         // await sendAlert({
@@ -82,6 +86,9 @@ const worker = new Worker(
 
       if (confirmedStatus === "DOWN" && successes >= RECOVERY_THRESHOLD) {
         confirmedStatus = "UP";
+
+        // 🟢 Resolve open incident
+        resolveIncident(monitorId);
 
         console.log(`🟢 RECOVERED: ${url}`);
 

@@ -56,6 +56,18 @@ export function runMigrations() {
     );
   `);
 
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS incidents (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      monitor_id INTEGER NOT NULL,
+      started_at DATETIME NOT NULL,
+      resolved_at DATETIME,
+      duration_seconds INTEGER,
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      FOREIGN KEY(monitor_id) REFERENCES monitors(id) ON DELETE CASCADE
+    );
+  `);
+
   // Safe column upgrades (older DBs)
   const safe = (sql: string) => {
     try { db.exec(sql); } catch {}
