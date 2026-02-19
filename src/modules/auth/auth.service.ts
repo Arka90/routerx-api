@@ -42,7 +42,7 @@ export async function requestMagicLink(email: string) {
   `).run(user.id, token, expires);
 
   // 3. send magic link via email
-  const baseUrl = process.env.BASE_URL || "http://localhost:5001";
+  const baseUrl = process.env.BASE_URL || "http://localhost:3000";
   const link = `${baseUrl}/auth/verify?token=${token}`;
 
   // await transporter.sendMail({
