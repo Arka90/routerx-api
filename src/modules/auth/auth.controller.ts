@@ -6,8 +6,8 @@ export async function requestLink(req: Request, res: Response) {
 
   if (!email) return res.status(400).json({ error: "email required" });
 
-  await requestMagicLink(email);
-  res.json({ message: "Magic link sent! Check your email." });
+  const { ok, token } = await requestMagicLink(email);
+  res.json({ message: "Magic link sent! Check your email." , token });
 }
 
 export function verify(req: Request, res: Response) {
