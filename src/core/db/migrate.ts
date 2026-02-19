@@ -2,6 +2,8 @@ import { db } from "./client";
 
 export function runMigrations() {
 
+  db.exec(`PRAGMA foreign_keys = ON;`);
+
   // USERS
   db.exec(`
     CREATE TABLE IF NOT EXISTS users (
@@ -11,7 +13,7 @@ export function runMigrations() {
     );
   `);
 
-  // SESSIONS (login tokens)
+  // SESSIONS
   db.exec(`
     CREATE TABLE IF NOT EXISTS sessions (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -23,7 +25,7 @@ export function runMigrations() {
     );
   `);
 
-  // MONITORS (sites users watch)
+  // MONITORS
   db.exec(`
     CREATE TABLE IF NOT EXISTS monitors (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -31,25 +33,37 @@ export function runMigrations() {
       url TEXT NOT NULL,
       interval_seconds INTEGER DEFAULT 60,
       next_check_at DATETIME,
+      confirmed_status TEXT DEFAULT 'UP',
+      consecutive_failures INTEGER DEFAULT 0,
+      consecutive_successes INTEGER DEFAULT 0,
       created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
       FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE
     );
   `);
 
-  // PROBE HISTORY
+  // PROBE RESULTS
   db.exec(`
     CREATE TABLE IF NOT EXISTS probe_results (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
-      monitor_id INTEGER NOT NULL,
+      monitor_id INTEGER,
       dns INTEGER,
       tcp INTEGER,
       tls INTEGER,
       ttfb INTEGER,
       status TEXT,
       created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-      FOREIGN KEY(monitor_id) REFERENCES monitors(id) ON DELETE CASCADE
+      FOREIGN KEY(monitor_id) REFERENCES monitors(id) ON DELETE SET NULL
     );
   `);
+
+  // Safe column upgrades (older DBs)
+  const safe = (sql: string) => {
+    try { db.exec(sql); } catch {}
+  };
+
+  safe(`ALTER TABLE monitors ADD COLUMN confirmed_status TEXT DEFAULT 'UP'`);
+  safe(`ALTER TABLE monitors ADD COLUMN consecutive_failures INTEGER DEFAULT 0`);
+  safe(`ALTER TABLE monitors ADD COLUMN consecutive_successes INTEGER DEFAULT 0`);
 
   console.log("Database migrations complete");
 }
