@@ -17,6 +17,7 @@ services:
     environment:
       REDIS_HOST: redis
       PORT: 3000
+      DOCKER: "true"
     ports:
       - "3000:3000"
     volumes:
@@ -34,6 +35,7 @@ services:
       - .env
     environment:
       REDIS_HOST: redis
+      DOCKER: "true"
     volumes:
       - routerx_data:/app/data
     depends_on:
