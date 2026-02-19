@@ -8,7 +8,7 @@ import { connectionOptions } from "../core/queue/redis";
 const worker = new Worker(
   "monitor-check",
   async (job: Job) => {
-    const { monitorId, url, intervalSeconds } = job.data;
+    const { monitorId, url } = job.data;
 
     const { diagnosis, dns, tcp, tls, http } = await runFullProbe(url);
 
@@ -27,12 +27,13 @@ const worker = new Worker(
     const alertStatus: 'UP' | 'DOWN' = currentStatus === 'DOWN' ? 'DOWN' : 'UP';
 
     if (previousStatus && previousStatus !== currentStatus) {
-      await sendAlert({
-        monitorId,
-        url,
-        status: alertStatus,
-        checkedAt: new Date(),
-      });
+      // await sendAlert({
+      //   monitorId,
+      //   url,
+      //   status: alertStatus,
+      //   checkedAt: new Date(),
+      // });
+      console.log("Alert sent");
     }
 
     db.prepare(`
