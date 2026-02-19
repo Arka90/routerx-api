@@ -2,7 +2,7 @@ name: RouteRx CI/CD
 
 on:
   push:
-   branches: [ master, main ]
+    branches: [master, main]
 
 jobs:
 
@@ -25,13 +25,12 @@ jobs:
       - name: Run tests
         run: npm test
 
-
   deploy:
     needs: test
     runs-on: ubuntu-latest
 
     steps:
-      - name: Deploy to VPS
+      - name: Deploy to VPS via Docker
         uses: appleboy/ssh-action@v1.0.3
         env:
           SMTP_HOST: ${{ secrets.SMTP_HOST }}
@@ -40,39 +39,41 @@ jobs:
           SMTP_PASS: ${{ secrets.SMTP_PASS }}
           ALERT_FROM: ${{ secrets.ALERT_FROM }}
           GENERAL_FROM: ${{ secrets.GENERAL_FROM }}
+          JWT_SECRET: ${{ secrets.JWT_SECRET }}
         with:
           host: ${{ secrets.SERVER_IP }}
           username: deploy
           key: ${{ secrets.SERVER_SSH_KEY }}
-          envs: SMTP_HOST,SMTP_PORT,SMTP_USER,SMTP_PASS,ALERT_FROM,GENERAL_FROM
+          envs: SMTP_HOST,SMTP_PORT,SMTP_USER,SMTP_PASS,ALERT_FROM,GENERAL_FROM,JWT_SECRET
           script: |
-            cd ~/apps/routerx-api
 
             set -e
 
-            echo "---- SYNC REPOSITORY ----"
+            echo "---- GO TO APP DIR ----"
+            cd ~/apps/routerx-api || exit 1
+
+            echo "---- UPDATE REPO ----"
             git fetch --all
             git reset --hard origin/master
             git clean -fd
 
-            echo "---- INSTALL ----"
-            npm ci
-
-            echo "---- BUILD ----"
-            npm run build
-
-            # Create .env on the server dynamically (after git reset so it doesn't get wiped)
+            echo "---- WRITE ENV ----"
             cat > .env << EOF
+            PORT=3000
+            REDIS_HOST=redis
             SMTP_HOST=$SMTP_HOST
             SMTP_PORT=$SMTP_PORT
             SMTP_USER=$SMTP_USER
             SMTP_PASS=$SMTP_PASS
             ALERT_FROM=$ALERT_FROM
             GENERAL_FROM=$GENERAL_FROM
+            JWT_SECRET=$JWT_SECRET
             EOF
 
-            echo "---- COPY .env ----"
-            cp .env ./dist/.env
+            echo "---- BUILD & START CONTAINERS ----"
+            docker compose down
+            docker compose up -d --build
 
-            echo "---- RELOAD PM2 ----"
-            pm2 reload routerx --update-env
+            echo "---- CLEAN OLD IMAGES ----"
+            docker image prune -af
+

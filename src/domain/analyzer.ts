@@ -6,7 +6,13 @@ export type ProbeResult = {
   statusCode?: number | null;
 };
 
-export function analyze(result: ProbeResult) {
+export type Diagnosis = {
+  status: 'UP' | 'DOWN' | 'SLOW';
+  reason: string;
+  message: string;
+};
+
+export function analyze(result: ProbeResult): Diagnosis {
   if (!result.dns) {
     return {
       status: "DOWN",

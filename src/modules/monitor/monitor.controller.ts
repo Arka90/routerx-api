@@ -3,17 +3,21 @@ import { AuthRequest } from "../auth/auth.middleware";
 import { createMonitor, getUserMonitors, updateMonitor, deleteMonitor, getMonitor } from "./monitor.service";
 import { sendMonitorNotification } from "../notifications/email.provider";
 import { z } from "zod";
+import { removeMonitorJob, scheduleMonitor } from "../../core/queue/monitor.scheduler";
 
 const monitorSchema = z.object({
   url: z.string().url(),
   interval_seconds: z.number().min(30).max(3600).optional().default(60),
 });
 
-export function addMonitor(req: AuthRequest, res: Response) {
+export async function addMonitor(req: AuthRequest, res: Response) {
   try {
     const { url, interval_seconds } = monitorSchema.parse(req.body);
 
     const monitor = createMonitor(req.user!.id, url, interval_seconds);
+
+    // 🔥 schedule first check
+    await scheduleMonitor(monitor.id, monitor.url, monitor.interval_seconds);
 
     // fire-and-forget email notification
     sendMonitorNotification(req.user!.email, url, "CREATED");
@@ -24,16 +28,19 @@ export function addMonitor(req: AuthRequest, res: Response) {
     });
   } catch (error: any) {
     if (error instanceof z.ZodError) {
-       res.status(400).json({ error: error.format() });
-       return; 
+      res.status(400).json({ error: error.format() });
+      return;
     }
     if (error.message === "Monitor already exists") {
-       res.status(409).json({ error: "You are already monitoring this URL" });
-       return;
+      res.status(409).json({ error: "You are already monitoring this URL" });
+      return;
     }
+    console.log(error);
+    
     res.status(500).json({ error: "Failed to create monitor" });
   }
 }
+
 
 export function listMonitors(req: AuthRequest, res: Response) {
   const monitors = getUserMonitors(req.user!.id);
@@ -51,50 +58,65 @@ export function getMonitorHandler(req: AuthRequest, res: Response) {
   res.json(monitor);
 }
 
-export function updateMonitorHandler(req: AuthRequest, res: Response) {
+export async function updateMonitorHandler(req: AuthRequest, res: Response) {
   const { id } = req.params;
+  const monitorId = parseInt(id as string);
+
   const { url, interval_seconds } = req.body;
 
   try {
-    // Basic validation for update
     if (url && !z.string().url().safeParse(url).success) {
       return res.status(400).json({ error: "Invalid URL" });
     }
 
     const updatedMonitor = updateMonitor(
       req.user!.id,
-      parseInt(id as string),
+      monitorId,
       { url, interval_seconds }
     );
-    
+
+    // 🔥 remove old scheduled job
+    await removeMonitorJob(monitorId);
+
+    // 🔥 reschedule with new config
+    await scheduleMonitor(
+      updatedMonitor.id,
+      updatedMonitor.url,
+      updatedMonitor.interval_seconds
+    );
+
     res.json(updatedMonitor);
   } catch (error: any) {
     if (error.message === "Monitor not found or unauthorized" || error.message === "Monitor not found") {
-       return res.status(404).json({ error: "Monitor not found" });
+      return res.status(404).json({ error: "Monitor not found" });
     }
     res.status(500).json({ error: "Failed to update monitor" });
   }
 }
 
-export function deleteMonitorHandler(req: AuthRequest, res: Response) {
+
+export async function deleteMonitorHandler(req: AuthRequest, res: Response) {
   const { id } = req.params;
+  const monitorId = parseInt(id as string);
 
   try {
-    // fetch monitor before deleting to get the URL for the email
-    const monitor = getMonitor(req.user!.id, parseInt(id as string));
+    const monitor = getMonitor(req.user!.id, monitorId);
 
-    deleteMonitor(req.user!.id, parseInt(id as string));
+    deleteMonitor(req.user!.id, monitorId);
 
-    // fire-and-forget email notification
+    // 🔥 stop future probes
+    await removeMonitorJob(monitorId);
+
     if (monitor) {
       sendMonitorNotification(req.user!.email, monitor.url, "DELETED");
     }
 
     res.json({ message: "Monitor deleted" });
   } catch (error: any) {
-     if (error.message === "Monitor not found or unauthorized") {
-       return res.status(404).json({ error: "Monitor not found" });
+    if (error.message === "Monitor not found or unauthorized") {
+      return res.status(404).json({ error: "Monitor not found" });
     }
     res.status(500).json({ error: "Failed to delete monitor" });
   }
 }
+
