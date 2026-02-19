@@ -71,8 +71,8 @@ jobs:
             EOF
 
             echo "---- BUILD & START CONTAINERS ----"
-            docker compose down
-            docker compose up -d --build
+            docker compose pull
+            docker compose up -d --build --remove-orphans
 
             echo "---- CLEAN OLD IMAGES ----"
             docker image prune -af

@@ -5,21 +5,7 @@ import { sendAlert } from "../modules/notifications/notifier";
 import { connectionOptions } from "../core/queue/redis";
 import { scheduleMonitor } from "../core/queue/monitor.scheduler";
 
-// Re-schedule all monitors from the database on startup
-// so jobs survive deployments even if Redis data is lost
-async function rescheduleAllMonitors() {
-  const monitors = db
-    .prepare(`SELECT id, url, interval_seconds FROM monitors`)
-    .all() as { id: number; url: string; interval_seconds: number }[];
 
-  console.log(`🔄 Re-scheduling ${monitors.length} monitor(s) from database...`);
-
-  for (const m of monitors) {
-    await scheduleMonitor(m.id, m.url, m.interval_seconds);
-  }
-
-  console.log(`✅ All monitors re-scheduled`);
-}
 
 
 const worker = new Worker(
@@ -77,9 +63,6 @@ const worker = new Worker(
 
 worker.on("ready", () => {
   console.log("🟢 Monitor worker connected to Redis");
-  rescheduleAllMonitors().catch((err) =>
-    console.error("❌ Failed to reschedule monitors:", err)
-  );
 });
 
 worker.on("active", (job) => {
