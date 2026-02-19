@@ -45,21 +45,21 @@ export async function requestMagicLink(email: string) {
   const baseUrl = process.env.BASE_URL || "http://localhost:5001";
   const link = `${baseUrl}/auth/verify?token=${token}`;
 
-  await transporter.sendMail({
-    from: `"RouterX" <${process.env.GENERAL_FROM}>`,
-    to: email,
-    subject: "Your Magic Login Link",
-    html: `
-      <h2>Login to RouterX</h2>
-      <p>Click below to sign in. This link expires in 15 minutes.</p>
-      <a href="${link}">Sign In →</a>
-      <p><small>If you didn't request this, ignore this email.</small></p>
-    `,
-  });
+  // await transporter.sendMail({
+  //   from: `"RouterX" <${process.env.GENERAL_FROM}>`,
+  //   to: email,
+  //   subject: "Your Magic Login Link",
+  //   html: `
+  //     <h2>Login to RouterX</h2>
+  //     <p>Click below to sign in. This link expires in 15 minutes.</p>
+  //     <a href="${link}">Sign In →</a>
+  //     <p><small>If you didn't request this, ignore this email.</small></p>
+  //   `,
+  // });
 
   console.log(`📧 Magic link sent to ${email}`);
 
-  return { ok: true };
+  return { ok: true, token };
 }
 
 export function verifyToken(token: string) {

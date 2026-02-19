@@ -6,6 +6,8 @@ services:
     image: redis:7-alpine
     container_name: routerx-redis
     restart: always
+    volumes:
+      - redis_data:/data
 
 
   api:
@@ -44,4 +46,5 @@ services:
 
 volumes:
   routerx_data:
+  redis_data:
 
