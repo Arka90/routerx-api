@@ -7,26 +7,40 @@ export async function scheduleMonitor(
   url: string,
   intervalSeconds: number
 ) {
-  await monitorQueue.add(
-    "check",
-    { monitorId, url, intervalSeconds },
+  // Use the modern Job Scheduler API instead of queue.add()
+  await monitorQueue.upsertJobScheduler(
+    `monitor:${monitorId}`,
+    { every: intervalSeconds * 1000 },
     {
-      jobId: `monitor:${monitorId}`,
-      repeat: {
-        every: intervalSeconds * 1000,
-      },
-      removeOnComplete: true,
-      removeOnFail: false,
+      name: "check",
+      data: { monitorId, url, intervalSeconds },
+      opts: {
+        removeOnComplete: true,
+        removeOnFail: false,
+      }
     }
   );
 }
 
 export async function removeMonitorJob(monitorId: number) {
-  const jobs = await monitorQueue.getRepeatableJobs();
+  const schedulerId = `monitor:${monitorId}`;
+  
+  // 1. Destroy the meta-configuration to stop future generation
+  await monitorQueue.removeJobScheduler(schedulerId);
 
-  for (const job of jobs) {
-    if (job.key.includes(`monitor:${monitorId}`)) {
-      await monitorQueue.removeRepeatableByKey(job.key);
+  // 2. Fetch pending delayed jobs to catch the orphaned instance
+  const delayedJobs = await monitorQueue.getDelayed();
+
+  // 3. Filter and manually purge any remaining concrete instances
+  const orphanedJobs = delayedJobs.filter(job => 
+    job.id && job.id.includes(schedulerId)
+  );
+
+  for (const job of orphanedJobs) {
+    try {
+      await job.remove();
+    } catch (error) {
+      console.error(`Failed to manually purge orphaned delayed job:`, error);
     }
   }
 }

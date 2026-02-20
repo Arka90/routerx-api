@@ -32,8 +32,7 @@ const worker = new Worker(
       .get(monitorId) as any;
 
     if (!monitorRow) {
-      console.log(`⚠️ Removing stale job for deleted monitor ${monitorId}`);
-      await job.remove();
+      console.log(`⚠️ Ignoring stale job for deleted monitor ${monitorId}`);
       return;
     }
 
