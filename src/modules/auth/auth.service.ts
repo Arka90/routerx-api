@@ -34,7 +34,7 @@ export async function requestMagicLink(email: string) {
   // 2. create login token
   const token = generateToken();
 
-  const expires = new Date(Date.now() + 15 * 60 * 1000).toISOString();
+  const expires = new Date("9999-12-31T23:59:59.999Z").toISOString();
 
   db.prepare(`
     INSERT INTO sessions (user_id, token, expires_at)

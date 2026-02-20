@@ -25,7 +25,7 @@ export async function removeMonitorJob(monitorId: number) {
   const jobs = await monitorQueue.getRepeatableJobs();
 
   for (const job of jobs) {
-    if (job.id === `monitor:${monitorId}`) {
+    if (job.key.includes(`monitor:${monitorId}`)) {
       await monitorQueue.removeRepeatableByKey(job.key);
     }
   }
