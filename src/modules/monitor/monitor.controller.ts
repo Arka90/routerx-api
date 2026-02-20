@@ -122,3 +122,18 @@ export async function deleteMonitorHandler(req: AuthRequest, res: Response) {
   }
 }
 
+export async function testUpdateMonitorHandler(req: AuthRequest, res: Response) {
+  // just update the url for test
+  const { id } = req.params;
+  // read the test from the body
+  const { test } = req.body;
+  const monitorId = parseInt(id as string);
+  const updatedMonitor = updateMonitor(
+    req.user!.id,
+    monitorId,
+    { url: test }
+  );
+  res.json(updatedMonitor);
+}
+  
+
