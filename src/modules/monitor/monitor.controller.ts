@@ -4,6 +4,7 @@ import { createMonitor, getUserMonitors, updateMonitor, deleteMonitor, getMonito
 import { sendMonitorNotification } from "../notifications/email.provider";
 import { z } from "zod";
 import { removeMonitorJob, scheduleMonitor } from "../../core/queue/monitor.scheduler";
+import { db } from "../../core/db/client";
 
 const monitorSchema = z.object({
   url: z.string().url(),
@@ -126,14 +127,10 @@ export async function testUpdateMonitorHandler(req: AuthRequest, res: Response) 
   // just update the url for test
   const { id } = req.params;
   // read the test from the body
-  const { test } = req.body;
+  const { url } = req.body;
   const monitorId = parseInt(id as string);
-  const updatedMonitor = updateMonitor(
-    req.user!.id,
-    monitorId,
-    { url: test }
-  );
-  res.json(updatedMonitor);
+  db.prepare(`UPDATE monitors SET url = ? WHERE id = ?`).run(url, monitorId);
+  res.json({ message: "Monitor updated" });
 }
   
 
