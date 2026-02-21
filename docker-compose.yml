@@ -43,6 +43,21 @@ services:
     depends_on:
       - redis
 
+  report-worker:
+    build: .
+    container_name: routerx-report-worker
+    restart: always
+    command: node dist/workers/report.worker.js
+    env_file:
+      - .env
+    environment:
+      REDIS_HOST: redis
+      DOCKER: "true"
+    volumes:
+      - routerx_data:/app/data
+    depends_on:
+      - redis
+
 
 volumes:
   routerx_data:

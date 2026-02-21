@@ -3,8 +3,9 @@ import { AuthRequest } from "../auth/auth.middleware";
 import { createMonitor, getUserMonitors, updateMonitor, deleteMonitor, getMonitor } from "./monitor.service";
 import { sendMonitorNotification } from "../notifications/email.provider";
 import { z } from "zod";
-import { removeMonitorJob, scheduleMonitor } from "../../core/queue/monitor.scheduler";
+
 import { db } from "../../core/db/client";
+import { removeMonitorJob, scheduleMonitor } from "../../core/queue/schedulers/monitor.scheduler";
 
 const monitorSchema = z.object({
   url: z.string().url(),
