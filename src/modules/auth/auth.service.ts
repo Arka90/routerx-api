@@ -47,11 +47,11 @@ export async function requestOtp(email: string) {
 
   // 3. send OTP via email
   await transporter.sendMail({
-    from: `"RouterX" <${process.env.GENERAL_FROM}>`,
+    from: `"RouteRX" <${process.env.GENERAL_FROM}>`,
     to: email,
-    subject: "Your RouterX Login OTP",
+    subject: "Your RouteRX Login OTP",
     html: `
-      <h2>Login to RouterX</h2>
+      <h2>Login to RouteRX</h2>
       <p>Your OTP is: <strong>${otp}</strong></p>
       <p>This OTP expires in 15 minutes.</p>
       <p><small>If you didn't request this, ignore this email.</small></p>

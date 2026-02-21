@@ -22,7 +22,7 @@ export async function addMonitor(req: AuthRequest, res: Response) {
     await scheduleMonitor(monitor.id, monitor.url, monitor.interval_seconds);
 
     // fire-and-forget email notification
-    // sendMonitorNotification(req.user!.email, url, "CREATED");
+    sendMonitorNotification(req.user!.email, url, "CREATED");
     console.log("Monitor created");
 
     res.status(201).json({
@@ -111,7 +111,7 @@ export async function deleteMonitorHandler(req: AuthRequest, res: Response) {
     await removeMonitorJob(monitorId);
 
     if (monitor) {
-      // sendMonitorNotification(req.user!.email, monitor.url, "DELETED");
+      sendMonitorNotification(req.user!.email, monitor.url, "DELETED");
       console.log("Monitor deleted");
     }
 

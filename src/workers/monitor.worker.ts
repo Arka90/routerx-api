@@ -74,14 +74,14 @@ const worker = new Worker(
 
         console.log(`🚨 CONFIRMED DOWN: ${url}`);
 
-        // if (!inMaintenance) {
-        //   await sendAlert({
-        //     monitorId,
-        //     url,
-        //     status: "DOWN",
-        //     checkedAt: new Date(),
-        //   });
-        // }
+        if (!inMaintenance) {
+          await sendAlert({
+            monitorId,
+            url,
+            status: "DOWN",
+            checkedAt: new Date(),
+          });
+        }
       }
     }
 
@@ -106,14 +106,14 @@ const worker = new Worker(
 
         console.log(`🟢 RECOVERED: ${url}`);
 
-        // if (!inMaintenance) {
-        //   await sendAlert({
-        //     monitorId,
-        //     url,
-        //     status: "UP",
-        //     checkedAt: new Date(),
-        //   });
-        // }
+        if (!inMaintenance) {
+          await sendAlert({
+            monitorId,
+            url,
+            status: "UP",
+            checkedAt: new Date(),
+          });
+        }
       }
     }
 
