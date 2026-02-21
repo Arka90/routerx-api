@@ -7,6 +7,7 @@ import { connectionOptions } from "../core/queue/redis";
 import { classifyFailure } from "../domain/diagnostics/root-cause.classifier";
 import { getCertificateExpiry } from "../domain/diagnostics/tls-expiry.checker";
 import { sendTlsExpiryAlert } from "../modules/notifications/email.provider";
+import { isInMaintenance } from "../domain/maintenance/maintenance.checker";
 
 /**
  * RULES
@@ -51,10 +52,13 @@ const worker = new Worker(
     const rootCause = classifyFailure({ dns, tcp, tls, http });
     const currentStatus: "UP" | "DOWN" | "SLOW" = diagnosis.status;
 
+    // Check maintenance window
+    const inMaintenance = isInMaintenance(monitorId);
+
     // -----------------------------
     // 3️⃣ Failure handling
     // -----------------------------
-    if (currentStatus === "DOWN") {
+    if (currentStatus === "DOWN" && !inMaintenance) {
       failures++;
       successes = 0;
 
@@ -64,16 +68,20 @@ const worker = new Worker(
         confirmedStatus = "DOWN";
 
         // 🔴 Record incident start
-        openIncident(monitorId, rootCause);
+        if (!inMaintenance) {
+          openIncident(monitorId, rootCause);
+        }
 
         console.log(`🚨 CONFIRMED DOWN: ${url}`);
 
-        // await sendAlert({
-        //   monitorId,
-        //   url,
-        //   status: "DOWN",
-        //   checkedAt: new Date(),
-        // });
+        // if (!inMaintenance) {
+        //   await sendAlert({
+        //     monitorId,
+        //     url,
+        //     status: "DOWN",
+        //     checkedAt: new Date(),
+        //   });
+        // }
       }
     }
 
@@ -92,16 +100,20 @@ const worker = new Worker(
         confirmedStatus = "UP";
 
         // 🟢 Resolve open incident
-        resolveIncident(monitorId);
+        if (!inMaintenance) {
+          resolveIncident(monitorId);
+        }
 
         console.log(`🟢 RECOVERED: ${url}`);
 
-        // await sendAlert({
-        //   monitorId,
-        //   url,
-        //   status: "UP",
-        //   checkedAt: new Date(),
-        // });
+        // if (!inMaintenance) {
+        //   await sendAlert({
+        //     monitorId,
+        //     url,
+        //     status: "UP",
+        //     checkedAt: new Date(),
+        //   });
+        // }
       }
     }
 
@@ -166,6 +178,9 @@ const worker = new Worker(
       console.error(`⚠️ TLS expiry check failed for ${url}:`, err);
     }
 
+    // During maintenance, store MAINTENANCE as the status
+    const finalStatus = inMaintenance ? "MAINTENANCE" : confirmedStatus;
+
     db.prepare(`
       UPDATE monitors
       SET
@@ -175,11 +190,14 @@ const worker = new Worker(
         tls_expiry_at = ?,
         tls_alerted_days = ?
       WHERE id = ?
-    `).run(failures, successes, confirmedStatus, tlsExpiryAt, tlsAlertedDays, monitorId);
+    `).run(failures, successes, finalStatus, tlsExpiryAt, tlsAlertedDays, monitorId);
 
     // -----------------------------
     // 6️⃣ Store probe history
     // -----------------------------
+    // Store probe result with finalStatus (MAINTENANCE during maintenance windows)
+    const probeStatus = inMaintenance ? "MAINTENANCE" : currentStatus;
+
     db.prepare(`
       INSERT INTO probe_results
       (monitor_id, dns, tcp, tls, ttfb, status, root_cause, http_status_code)
@@ -190,7 +208,7 @@ const worker = new Worker(
       tcp?.time ?? null,
       tls?.time ?? null,
       http?.ttfb ?? null,
-      currentStatus,
+      probeStatus,
       rootCause,
       http?.statusCode ?? null,
     );

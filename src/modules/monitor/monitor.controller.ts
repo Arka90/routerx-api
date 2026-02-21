@@ -132,5 +132,55 @@ export async function testUpdateMonitorHandler(req: AuthRequest, res: Response) 
   db.prepare(`UPDATE monitors SET url = ? WHERE id = ?`).run(url, monitorId);
   res.json({ message: "Monitor updated" });
 }
-  
 
+export function scheduleMaintenance(req: AuthRequest, res: Response) {
+  const { id } = req.params;
+  const monitorId = parseInt(id as string);
+  const { starts_at, ends_at, reason } = req.body;
+
+  try {
+    // verify monitor belongs to user
+    const monitor = getMonitor(req.user!.id, monitorId);
+    if (!monitor) {
+      return res.status(404).json({ error: "Monitor not found" });
+    }
+
+    // insert maintenance window
+    db.prepare(`
+      INSERT INTO maintenance_windows (monitor_id, starts_at, ends_at, reason)
+      VALUES (?, ?, ?, ?)
+    `).run(monitorId, starts_at, ends_at, reason ?? null);
+
+    // flag monitor as in maintenance
+    db.prepare(`UPDATE monitors SET in_maintenance = 1 WHERE id = ?`).run(monitorId);
+
+    res.json({ message: "Maintenance scheduled" });
+  } catch (error: any) {
+    console.error(error);
+    res.status(500).json({ error: "Failed to schedule maintenance" });
+  }
+}
+
+export function removeMaintenance(req: AuthRequest, res: Response) {
+  const { id } = req.params;
+  const monitorId = parseInt(id as string);
+
+  try {
+    // verify monitor belongs to user
+    const monitor = getMonitor(req.user!.id, monitorId);
+    if (!monitor) {
+      return res.status(404).json({ error: "Monitor not found" });
+    }
+
+    // remove all maintenance windows for this monitor
+    db.prepare(`DELETE FROM maintenance_windows WHERE monitor_id = ?`).run(monitorId);
+
+    // clear maintenance flag
+    db.prepare(`UPDATE monitors SET in_maintenance = 0 WHERE id = ?`).run(monitorId);
+
+    res.json({ message: "Maintenance removed" });
+  } catch (error: any) {
+    console.error(error);
+    res.status(500).json({ error: "Failed to remove maintenance" });
+  }
+}

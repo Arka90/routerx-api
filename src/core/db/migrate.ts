@@ -56,6 +56,7 @@ export function runMigrations() {
     );
   `);
 
+  // INCIDENTS
   db.exec(`
     CREATE TABLE IF NOT EXISTS incidents (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -63,6 +64,19 @@ export function runMigrations() {
       started_at DATETIME NOT NULL,
       resolved_at DATETIME,
       duration_seconds INTEGER,
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      FOREIGN KEY(monitor_id) REFERENCES monitors(id) ON DELETE CASCADE
+    );
+  `);
+
+  // MAINTENANCE WINDOWS
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS maintenance_windows (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      monitor_id INTEGER NOT NULL,
+      starts_at DATETIME NOT NULL,
+      ends_at DATETIME NOT NULL,
+      reason TEXT,
       created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
       FOREIGN KEY(monitor_id) REFERENCES monitors(id) ON DELETE CASCADE
     );
@@ -87,6 +101,9 @@ export function runMigrations() {
 
   // Incidents — root_cause column used by incident.service
   safe(`ALTER TABLE incidents ADD COLUMN root_cause TEXT`);
+
+  // Maintenance flag on monitors
+  safe(`ALTER TABLE monitors ADD COLUMN in_maintenance INTEGER DEFAULT 0`);
 
   console.log("Database migrations complete");
 }
