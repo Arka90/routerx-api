@@ -3,7 +3,7 @@ import { requestLink, verify } from "./auth.controller";
 
 const router = Router();
 
-router.post("/request-link", requestLink);
-router.get("/verify", verify);
+router.post("/request-otp", requestLink);
+router.post("/verify-otp", verify);
 
 export default router;

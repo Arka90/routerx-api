@@ -1,7 +1,7 @@
 import { db } from "../../core/db/client";
-import crypto from "crypto";
 import nodemailer from "nodemailer";
 import "dotenv/config";
+import jwt from "jsonwebtoken";
 
 const transporter = nodemailer.createTransport({
   host: process.env.SMTP_HOST,
@@ -13,11 +13,11 @@ const transporter = nodemailer.createTransport({
   },
 });
 
-function generateToken() {
-  return crypto.randomBytes(32).toString("hex");
+function generateOTP() {
+  return Math.floor(1000 + Math.random() * 9000).toString();
 }
 
-export async function requestMagicLink(email: string) {
+export async function requestOtp(email: string) {
   // 1. find or create user
   let user = db
     .prepare("SELECT * FROM users WHERE email = ?")
@@ -31,45 +31,63 @@ export async function requestMagicLink(email: string) {
     user = { id: result.lastInsertRowid, email };
   }
 
-  // 2. create login token
-  const token = generateToken();
+  // Delete previous OTP sessions for this user to avoid clutter
+  db.prepare("DELETE FROM sessions WHERE user_id = ? AND token LIKE 'OTP-%'").run(user.id);
 
-  const expires = new Date("9999-12-31T23:59:59.999Z").toISOString();
+  // 2. create OTP token
+  const otp = generateOTP();
+  const token = `OTP-${user.id}-${otp}`;
+  // 15 minutes expiry
+  const expires = new Date(Date.now() + 15 * 60 * 1000).toISOString();
 
   db.prepare(`
     INSERT INTO sessions (user_id, token, expires_at)
     VALUES (?, ?, ?)
   `).run(user.id, token, expires);
 
-  // 3. send magic link via email
-  const baseUrl = process.env.BASE_URL || "http://localhost:3000";
-  const link = `${baseUrl}/auth/verify?token=${token}`;
+  // 3. send OTP via email
+  await transporter.sendMail({
+    from: `"RouterX" <${process.env.GENERAL_FROM}>`,
+    to: email,
+    subject: "Your RouterX Login OTP",
+    html: `
+      <h2>Login to RouterX</h2>
+      <p>Your OTP is: <strong>${otp}</strong></p>
+      <p>This OTP expires in 15 minutes.</p>
+      <p><small>If you didn't request this, ignore this email.</small></p>
+    `,
+  });
 
-  // await transporter.sendMail({
-  //   from: `"RouterX" <${process.env.GENERAL_FROM}>`,
-  //   to: email,
-  //   subject: "Your Magic Login Link",
-  //   html: `
-  //     <h2>Login to RouterX</h2>
-  //     <p>Click below to sign in. This link expires in 15 minutes.</p>
-  //     <a href="${link}">Sign In →</a>
-  //     <p><small>If you didn't request this, ignore this email.</small></p>
-  //   `,
-  // });
+  console.log(`📧 OTP sent to ${email}: ${otp}`);
 
-  console.log(`📧 Magic link sent to ${email}`);
-
-  return { ok: true, token };
+  return { ok: true };
 }
 
-export function verifyToken(token: string) {
+export function verifyOtp(email: string, otp: string) {
+  // Find user by email to construct token string
+  const user = db.prepare("SELECT * FROM users WHERE email = ?").get(email) as any;
+  if (!user) return null;
+
+  const tokenStr = `OTP-${user.id}-${otp}`;
+
   const session = db
     .prepare("SELECT * FROM sessions WHERE token = ?")
-    .get(token) as any;
+    .get(tokenStr) as any;
 
   if (!session) return null;
 
-  if (new Date(session.expires_at) < new Date()) return null;
+  if (new Date(session.expires_at) < new Date()) {
+    // Optional: cleanup expired Token
+    db.prepare("DELETE FROM sessions WHERE token = ?").run(tokenStr);
+    return null;
+  }
 
-  return session;
+  // OTP verified, issue JWT token valid for 7 days
+  const jwtSecret = process.env.JWT_SECRET || "fallback_secret_dont_use_in_prod";
+  const jwtToken = jwt.sign({ id: user.id, email: user.email }, jwtSecret, { expiresIn: "7d" });
+
+  // Delete the OTP session as it's been used successfully
+  db.prepare("DELETE FROM sessions WHERE token = ?").run(tokenStr);
+
+  return { token: jwtToken };
 }

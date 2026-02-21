@@ -1,5 +1,6 @@
 import { Request, Response, NextFunction } from "express";
-import { db } from "../../core/db/client";
+import jwt from "jsonwebtoken";
+import "dotenv/config";
 
 export interface AuthRequest extends Request {
   user?: {
@@ -16,31 +17,19 @@ export function requireAuth(req: AuthRequest, res: Response, next: NextFunction)
   }
 
   const token = authHeader.split(" ")[1];
+  const jwtSecret = process.env.JWT_SECRET || "fallback_secret_dont_use_in_prod";
 
-  // find session
-  const session = db
-    .prepare(`
-      SELECT sessions.*, users.email
-      FROM sessions
-      JOIN users ON users.id = sessions.user_id
-      WHERE token = ?
-    `)
-    .get(token) as any;
+  try {
+    const decoded = jwt.verify(token, jwtSecret) as { id: number; email: string };
+    
+    // attach user to request
+    req.user = {
+      id: decoded.id,
+      email: decoded.email,
+    };
 
-  if (!session) {
-    return res.status(401).json({ error: "Invalid session" });
+    next();
+  } catch (error) {
+    return res.status(401).json({ error: "Invalid or expired token" });
   }
-
-  // expired?
-  if (new Date(session.expires_at) < new Date()) {
-    return res.status(401).json({ error: "Session expired" });
-  }
-
-  // attach user to request
-  req.user = {
-    id: session.user_id,
-    email: session.email,
-  };
-
-  next();
 }
