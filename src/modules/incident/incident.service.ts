@@ -1,4 +1,5 @@
 import { db } from "../../core/db/client";
+import { RootCause } from "../../domain/diagnostics/root-cause.classifier";
 
 export interface Incident {
   id: number;
@@ -13,7 +14,7 @@ export interface Incident {
  * Open a new incident when a monitor is confirmed DOWN.
  * If there's already an open incident for this monitor, skip.
  */
-export function openIncident(monitorId: number): Incident | null {
+export function openIncident(monitorId: number, rootCause: RootCause): Incident | null {
   const existing = db
     .prepare(
       `SELECT id FROM incidents WHERE monitor_id = ? AND resolved_at IS NULL`
@@ -26,9 +27,9 @@ export function openIncident(monitorId: number): Incident | null {
 
   const result = db
     .prepare(
-      `INSERT INTO incidents (monitor_id, started_at) VALUES (?, ?)`
+      `INSERT INTO incidents (monitor_id, started_at, root_cause) VALUES (?, ?, ?)`
     )
-    .run(monitorId, now);
+    .run(monitorId, now, rootCause);
 
   return {
     id: Number(result.lastInsertRowid),

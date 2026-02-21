@@ -77,5 +77,16 @@ export function runMigrations() {
   safe(`ALTER TABLE monitors ADD COLUMN consecutive_failures INTEGER DEFAULT 0`);
   safe(`ALTER TABLE monitors ADD COLUMN consecutive_successes INTEGER DEFAULT 0`);
 
+  // TLS certificate expiry tracking
+  safe(`ALTER TABLE monitors ADD COLUMN tls_expiry_at DATETIME`);
+  safe(`ALTER TABLE monitors ADD COLUMN tls_alerted_days TEXT DEFAULT ''`);
+
+  // Probe results — columns used by worker but missing from original CREATE
+  safe(`ALTER TABLE probe_results ADD COLUMN root_cause TEXT`);
+  safe(`ALTER TABLE probe_results ADD COLUMN http_status_code INTEGER`);
+
+  // Incidents — root_cause column used by incident.service
+  safe(`ALTER TABLE incidents ADD COLUMN root_cause TEXT`);
+
   console.log("Database migrations complete");
 }

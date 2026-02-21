@@ -81,3 +81,33 @@ export async function sendMonitorNotification(
     console.error(`Failed to send monitor ${event} email:`, err);
   }
 }
+
+export async function sendTlsExpiryAlert(
+  email: string,
+  url: string,
+  expiryDate: Date,
+  daysLeft: number
+) {
+  const subject = `⚠️ TLS Certificate Expiring Soon: ${url}`;
+
+  const html = `
+    <h2>RouteRx TLS Alert</h2>
+    <p><strong>Site:</strong> ${url}</p>
+    <p><strong>Certificate Expires:</strong> ${expiryDate.toISOString()}</p>
+    <p><strong>Days Remaining:</strong> ${Math.floor(daysLeft)}</p>
+    <p>Please renew your TLS certificate before it expires to avoid downtime.</p>
+    <p><small>${new Date().toISOString()}</small></p>
+  `;
+
+  try {
+    await transporter.sendMail({
+      from: `"RouteRx Alerts" <${process.env.ALERT_FROM}>`,
+      to: email,
+      subject,
+      html,
+    });
+    console.log(`📧 TLS expiry alert sent to ${email} (${Math.floor(daysLeft)} days left)`);
+  } catch (err) {
+    console.error(`Failed to send TLS expiry alert:`, err);
+  }
+}
