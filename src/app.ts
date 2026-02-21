@@ -1,4 +1,5 @@
 import express from "express";
+import cors from "cors";
 import healthRoute from "./modules/health/health.route";
 import probeRoutes from "./modules/probe/probe.route";
 import authRoutes from "./modules/auth/auth.routes";
@@ -12,6 +13,7 @@ import { db } from "./core/db/client";
 
 
 const app = express();
+app.use(cors());
 app.use(express.json());
 runMigrations();
 
