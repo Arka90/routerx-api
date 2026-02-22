@@ -141,15 +141,6 @@ export async function deleteMonitorHandler(req: AuthRequest, res: Response) {
   }
 }
 
-export async function testUpdateMonitorHandler(req: AuthRequest, res: Response) {
-  // just update the url for test
-  const { id } = req.params;
-  // read the test from the body
-  const { url } = req.body;
-  const monitorId = parseInt(id as string);
-  db.prepare(`UPDATE monitors SET url = ? WHERE id = ?`).run(url, monitorId);
-  res.json({ message: "Monitor updated" });
-}
 
 export function scheduleMaintenance(req: AuthRequest, res: Response) {
   const { id } = req.params;

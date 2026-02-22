@@ -188,9 +188,10 @@ const worker = new Worker(
         consecutive_successes = ?,
         confirmed_status = ?,
         tls_expiry_at = ?,
-        tls_alerted_days = ?
+        tls_alerted_days = ?,
+        in_maintenance = ?
       WHERE id = ?
-    `).run(failures, successes, finalStatus, tlsExpiryAt, tlsAlertedDays, monitorId);
+    `).run(failures, successes, finalStatus, tlsExpiryAt, tlsAlertedDays, inMaintenance ? 1 : 0, monitorId);
 
     // -----------------------------
     // 6️⃣ Store probe history
