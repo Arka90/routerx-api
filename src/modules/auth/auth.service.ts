@@ -14,8 +14,8 @@ const transporter = nodemailer.createTransport({
 });
 
 function generateOTP() {
-  // return Math.floor(1000 + Math.random() * 9000).toString();
-  return "1234";
+  return Math.floor(1000 + Math.random() * 9000).toString();
+
 }
 
 export async function requestOtp(email: string) {
@@ -47,17 +47,17 @@ export async function requestOtp(email: string) {
   `).run(user.id, token, expires);
 
   // 3. send OTP via email
-  // await transporter.sendMail({
-  //   from: `"RouteRX" <${process.env.GENERAL_FROM}>`,
-  //   to: email,
-  //   subject: "Your RouteRX Login OTP",
-  //   html: `
-  //     <h2>Login to RouteRX</h2>
-  //     <p>Your OTP is: <strong>${otp}</strong></p>
-  //     <p>This OTP expires in 15 minutes.</p>
-  //     <p><small>If you didn't request this, ignore this email.</small></p>
-  //   `,
-  // });
+  await transporter.sendMail({
+    from: `"RouteRX" <${process.env.GENERAL_FROM}>`,
+    to: email,
+    subject: "Your RouteRX Login OTP",
+    html: `
+      <h2>Login to RouteRX</h2>
+      <p>Your OTP is: <strong>${otp}</strong></p>
+      <p>This OTP expires in 15 minutes.</p>
+      <p><small>If you didn't request this, ignore this email.</small></p>
+    `,
+  });
 
   console.log(`📧 OTP sent to ${email}: ${otp}`);
 
