@@ -120,3 +120,42 @@ export function deleteMonitor(userId: number, monitorId: number): boolean {
 
   return true;
 }
+
+export function getProbeResultsForMonitor(userId: number, monitorId: number, limit = 100) {
+  const monitor = getMonitor(userId, monitorId);
+  if (!monitor) {
+    throw new Error("Monitor not found or unauthorized");
+  }
+
+  const results = db
+    .prepare(`
+      SELECT 
+        id,
+        dns,
+        tcp,
+        tls,
+        ttfb,
+        status,
+        http_status_code,
+        created_at
+      FROM probe_results
+      WHERE monitor_id = ?
+      ORDER BY created_at DESC
+      LIMIT ?
+    `)
+    .all(monitorId, limit);
+
+  // Reverse to make it chronological for charting
+  return results.reverse().map((row: any) => ({
+    id: row.id,
+    timestamp: row.created_at,
+    dns: row.dns,
+    tcp: row.tcp,
+    tls: row.tls,
+    ttfb: row.ttfb,
+    status: row.status,
+    http_status_code: row.http_status_code,
+    // Provide a convenient 'responseTime' field for simple graphing
+    responseTime: row.ttfb ?? row.tls ?? row.tcp ?? row.dns ?? 0
+  }));
+}

@@ -1,6 +1,6 @@
 import { Response } from "express";
 import { AuthRequest } from "../auth/auth.middleware";
-import { createMonitor, getUserMonitors, updateMonitor, deleteMonitor, getMonitor } from "./monitor.service";
+import { createMonitor, getUserMonitors, updateMonitor, deleteMonitor, getMonitor, getProbeResultsForMonitor } from "./monitor.service";
 import { sendMonitorNotification } from "../notifications/email.provider";
 import { z } from "zod";
 
@@ -59,6 +59,23 @@ export function getMonitorHandler(req: AuthRequest, res: Response) {
   }
 
   res.json(monitor);
+}
+
+export function getMonitorProbes(req: AuthRequest, res: Response) {
+  const { id } = req.params;
+  const monitorId = parseInt(id as string);
+  const limit = req.query.limit ? parseInt(req.query.limit as string) : 100;
+
+  try {
+    const results = getProbeResultsForMonitor(req.user!.id, monitorId, limit);
+    res.json(results);
+  } catch (error: any) {
+    if (error.message === "Monitor not found or unauthorized") {
+      return res.status(404).json({ error: "Monitor not found" });
+    }
+    console.error(error);
+    res.status(500).json({ error: "Failed to fetch probe results" });
+  }
 }
 
 export async function updateMonitorHandler(req: AuthRequest, res: Response) {
