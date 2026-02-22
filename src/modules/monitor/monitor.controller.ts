@@ -7,6 +7,7 @@ import { resolveIncident } from "../incident/incident.service";
 
 import { db } from "../../core/db/client";
 import { removeMonitorJob, scheduleMonitor } from "../../core/queue/schedulers/monitor.scheduler";
+import { isInMaintenance } from "../../domain/maintenance/maintenance.checker";
 
 const monitorSchema = z.object({
   url: z.string().url(),
@@ -155,14 +156,18 @@ export function scheduleMaintenance(req: AuthRequest, res: Response) {
       return res.status(404).json({ error: "Monitor not found" });
     }
 
+    // delete any existing maintenance windows first to enforce 1-window rule
+    db.prepare(`DELETE FROM maintenance_windows WHERE monitor_id = ?`).run(monitorId);
+
     // insert maintenance window
     db.prepare(`
       INSERT INTO maintenance_windows (monitor_id, starts_at, ends_at, reason)
       VALUES (?, ?, ?, ?)
     `).run(monitorId, starts_at, ends_at, reason ?? null);
 
-    // flag monitor as in maintenance
-    db.prepare(`UPDATE monitors SET in_maintenance = 1 WHERE id = ?`).run(monitorId);
+    // update the maintenance flag based on whether it is CURRENTLY in maintenance
+    const inMaintenance = isInMaintenance(monitorId);
+    db.prepare(`UPDATE monitors SET in_maintenance = ? WHERE id = ?`).run(inMaintenance ? 1 : 0, monitorId);
 
     res.json({ message: "Maintenance scheduled" });
   } catch (error: any) {
@@ -200,5 +205,32 @@ export function removeMaintenance(req: AuthRequest, res: Response) {
   } catch (error: any) {
     console.error(error);
     res.status(500).json({ error: "Failed to remove maintenance" });
+  }
+}
+
+export function getMaintenance(req: AuthRequest, res: Response) {
+  const { id } = req.params;
+  const monitorId = parseInt(id as string);
+
+  try {
+    const monitor = getMonitor(req.user!.id, monitorId);
+    if (!monitor) {
+      return res.status(404).json({ error: "Monitor not found" });
+    }
+
+    const window = db.prepare(`
+      SELECT * FROM maintenance_windows 
+      WHERE monitor_id = ?
+      ORDER BY id DESC LIMIT 1
+    `).get(monitorId);
+
+    if (!window) {
+      return res.json({ maintenance: null });
+    }
+
+    res.json({ maintenance: window });
+  } catch (error: any) {
+    console.error(error);
+    res.status(500).json({ error: "Failed to fetch maintenance window" });
   }
 }

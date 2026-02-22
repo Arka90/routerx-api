@@ -1,6 +1,6 @@
 import { Router } from "express";
 import { requireAuth } from "../auth/auth.middleware";
-import { addMonitor, listMonitors, updateMonitorHandler, deleteMonitorHandler, getMonitorHandler,  scheduleMaintenance, removeMaintenance, getMonitorProbes } from "./monitor.controller";
+import { addMonitor, listMonitors, updateMonitorHandler, deleteMonitorHandler, getMonitorHandler, scheduleMaintenance, removeMaintenance, getMaintenance, getMonitorProbes } from "./monitor.controller";
 
 const router = Router();
 
@@ -12,6 +12,7 @@ router.delete("/:id", requireAuth, deleteMonitorHandler);
 router.get("/:id/probes", requireAuth, getMonitorProbes);
 
 // Maintenance
+router.get("/:id/maintenance", requireAuth, getMaintenance);
 router.post("/:id/maintenance", requireAuth, scheduleMaintenance);
 router.delete("/:id/maintenance", requireAuth, removeMaintenance);
 
