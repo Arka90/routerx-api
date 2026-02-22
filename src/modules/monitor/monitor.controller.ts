@@ -3,6 +3,7 @@ import { AuthRequest } from "../auth/auth.middleware";
 import { createMonitor, getUserMonitors, updateMonitor, deleteMonitor, getMonitor, getProbeResultsForMonitor } from "./monitor.service";
 import { sendMonitorNotification } from "../notifications/email.provider";
 import { z } from "zod";
+import { resolveIncident } from "../incident/incident.service";
 
 import { db } from "../../core/db/client";
 import { removeMonitorJob, scheduleMonitor } from "../../core/queue/schedulers/monitor.scheduler";
@@ -184,8 +185,16 @@ export function removeMaintenance(req: AuthRequest, res: Response) {
     // remove all maintenance windows for this monitor
     db.prepare(`DELETE FROM maintenance_windows WHERE monitor_id = ?`).run(monitorId);
 
-    // clear maintenance flag
-    db.prepare(`UPDATE monitors SET in_maintenance = 0 WHERE id = ?`).run(monitorId);
+    // clear maintenance flag and reset confirmed_status if it was stuck in MAINTENANCE
+    db.prepare(`
+      UPDATE monitors 
+      SET in_maintenance = 0,
+          confirmed_status = CASE WHEN confirmed_status = 'MAINTENANCE' THEN 'UP' ELSE confirmed_status END
+      WHERE id = ?
+    `).run(monitorId);
+
+    // If there was an open incident before maintenance, resolve it now
+    resolveIncident(monitorId);
 
     res.json({ message: "Maintenance removed" });
   } catch (error: any) {

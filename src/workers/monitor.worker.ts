@@ -55,6 +55,13 @@ const worker = new Worker(
     // Check maintenance window
     const inMaintenance = isInMaintenance(monitorId);
 
+    // If it was in maintenance previously but not anymore, reset to UP
+    if (confirmedStatus === "MAINTENANCE" && !inMaintenance) {
+      confirmedStatus = "UP";
+      // Ensure any lingering incidents from before maintenance are explicitly resolved
+      resolveIncident(monitorId);
+    }
+
     // -----------------------------
     // 3️⃣ Failure handling
     // -----------------------------
