@@ -6,6 +6,11 @@ import authRoutes from "./modules/auth/auth.routes";
 import orgRoutes from "./modules/org/org.route";
 import inviteRoutes from "./modules/org/invite.route";
 import channelRoutes from "./modules/channels/channel.route";
+import statusPageRoutes from "./modules/status-pages/status-page.route";
+import publicStatusRoutes from "./modules/status-pages/public.route";
+import regionRoutes from "./modules/regions/region.route";
+import billingRoutes from "./modules/billing/billing.route";
+import { webhookHandler } from "./modules/billing/billing.controller";
 import monitorRoutes from "./modules/monitor/monitor.route";
 import incidentRoutes from "./modules/incident/incident.route";
 import { requireAuth } from "./modules/auth/auth.middleware";
@@ -34,6 +39,17 @@ if (config.corsOrigins.length > 0) {
   app.use(cors({ exposedHeaders: ["Retry-After"] }));
 }
 
+/**
+ * Mounted before the JSON parser on purpose. A Stripe signature covers the
+ * exact bytes that were sent, so the handler needs the raw body — parsing and
+ * re-serialising would reorder keys and fail every verification.
+ */
+app.post(
+  "/billing/webhook",
+  express.raw({ type: "application/json", limit: "1mb" }),
+  webhookHandler
+);
+
 app.use(express.json({ limit: "256kb" }));
 
 // Coarse backstop under the per-route limits, so no single client can
@@ -42,9 +58,16 @@ app.use(rateLimit("global", { windowMs: 60 * 1000, max: 600 }));
 
 app.use("/health", healthRoute);
 app.use("/auth", authRoutes);
+
+// The public status page. Unauthenticated by design — it is what customers
+// read during an outage, which is exactly when it gets the most traffic.
+app.use("/status", publicStatusRoutes);
 app.use("/invites", inviteRoutes);
 app.use("/orgs", orgRoutes);
 app.use("/channels", channelRoutes);
+app.use("/status-pages", statusPageRoutes);
+app.use("/regions", regionRoutes);
+app.use("/billing", billingRoutes);
 app.use("/monitor", monitorRoutes);
 app.use("/incidents", incidentRoutes);
 

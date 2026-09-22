@@ -11,6 +11,7 @@ import {
 import { getProvider } from "../notifications/registry";
 import { ChannelConfigError } from "../notifications/types";
 import { config as appConfig } from "../../core/config";
+import { assertWithinQuota, QuotaExceededError } from "../billing/quota";
 
 const channelType = z.enum(["email", "slack", "discord", "webhook"]);
 
@@ -38,6 +39,8 @@ export async function createChannelHandler(req: AuthRequest, res: Response) {
   }
 
   try {
+    await assertWithinQuota(req.orgId!, "channels");
+
     const channel = await createChannel(
       req.orgId!,
       parsed.data.type,
@@ -47,6 +50,9 @@ export async function createChannelHandler(req: AuthRequest, res: Response) {
 
     res.status(201).json({ channel });
   } catch (error) {
+    if (error instanceof QuotaExceededError) {
+      return res.status(402).json({ error: error.message, upgrade_required: true });
+    }
     if (error instanceof ChannelConfigError) {
       return res.status(400).json({ error: error.message });
     }

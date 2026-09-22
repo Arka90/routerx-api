@@ -15,6 +15,8 @@ export interface Monitor {
   timeout_ms: number;
   follow_redirects: boolean;
   interval_seconds: number;
+  /** Empty means every enabled region. */
+  regions: string[];
   paused: boolean;
   confirmed_status: "UP" | "DOWN" | "DEGRADED" | "UNCONFIRMED" | "MAINTENANCE";
   consecutive_failures: number;
@@ -34,6 +36,8 @@ export interface AlertPolicy {
   slow_threshold_ms: number;
   renotify_minutes: number | null;
   muted_until: Date | null;
+  /** Regions that must independently agree before an incident opens. */
+  confirmations: number;
 }
 
 export const DEFAULT_POLICY: Omit<AlertPolicy, "monitor_id"> = {
@@ -43,6 +47,7 @@ export const DEFAULT_POLICY: Omit<AlertPolicy, "monitor_id"> = {
   slow_threshold_ms: 1500,
   renotify_minutes: null,
   muted_until: null,
+  confirmations: 1,
 };
 
 export interface MonitorWithPolicy extends Monitor {
@@ -62,6 +67,7 @@ export interface CreateMonitorInput {
   timeout_ms?: number;
   follow_redirects?: boolean;
   interval_seconds?: number;
+  regions?: string[];
   paused?: boolean;
 }
 
@@ -74,5 +80,6 @@ export interface AlertPolicyInput {
   slow_threshold_ms?: number;
   renotify_minutes?: number | null;
   muted_until?: string | null;
+  confirmations?: number;
   channel_ids?: number[];
 }

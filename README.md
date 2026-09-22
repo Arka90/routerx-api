@@ -126,19 +126,31 @@ RouteRX automatically extracts and validates SSL certificate metadata. It active
 #### 6️⃣ Maintenance Windows
 Prevent alerting engineers at 2AM for planned deployments with scheduled routing maintenance which natively suppresses alerts while seamlessly resuming once the window ends.
 
-#### 7️⃣ Content Assertions
+#### 7️⃣ Multi-Region Confirmation
+Checks run from every region you deploy a worker to. A monitor's alert policy
+says how many regions must independently agree before an incident opens, so a
+routing problem between one probe and your site does not page anybody — and
+recovery requires *every* region to be healthy, not just a quorum. See
+[docs/MULTI-REGION.md](docs/MULTI-REGION.md).
+
+#### 8️⃣ Public Status Pages
+A page per workspace at `/status/<slug>`: 90 days of per-component uptime,
+incident history with posted updates, and double-opt-in email subscribers.
+Components carry a display name, never the monitor's URL.
+
+#### 9️⃣ Content Assertions
 A check is more than "did it return 200". Each monitor carries its own method,
 headers, body, expected status codes and an optional body assertion
 (`contains`, `not_contains`, or a `json_path` equality), because a page that
 returns 200 while rendering an error is the outage that actually catches
 people out.
 
-#### 8️⃣ Team Workspaces
+#### 🔟 Team Workspaces
 Monitors, alert channels and incidents belong to a workspace. Teammates are
 invited by email with an owner, admin or read-only member role. Members can
 acknowledge an incident without being able to reconfigure monitoring.
 
-#### 9️⃣ Alert Routing
+#### 1️⃣1️⃣ Alert Routing
 Alerts fan out to email, Slack, Discord, or a signed generic webhook, per
 monitor or per workspace. Thresholds, a latency threshold, re-notification
 cadence and muting are configured per monitor, and every delivery attempt is
@@ -230,9 +242,11 @@ npm run worker
 - [x] Team workspaces with roles and invitations
 - [x] Slack, Discord and signed webhook alerting
 - [x] Per-monitor alert policies and content assertions
-- [ ] Public status pages
-- [ ] Multi-region monitoring execution points
-- [ ] Billing and plan quotas
+- [x] Public status pages with incident updates and subscribers
+- [x] Multi-region probing with quorum confirmation
+- [x] Plans, quotas and Stripe billing
+- [ ] Status page custom domains
+- [ ] A public REST API with scoped keys
 - [ ] Advanced anomaly detection via ML
 - [ ] Slack/Discord native bot notifications
 - [ ] External distributed probe clusters
