@@ -42,7 +42,9 @@ export function getUptimeHandler(req: AuthRequest, res: Response) {
     return res.status(404).json({ error: "Monitor not found" });
   }
 
-  const hours = Math.max(1, Number(req.query.hours) || 24);
+  // Capped at a year: the window is only used to size a division, but an
+  // unbounded value is free to send and makes the number meaningless.
+  const hours = Math.min(8760, Math.max(1, Number(req.query.hours) || 24));
   const uptime = calculateUptime(monitorId, hours);
 
   res.json({
