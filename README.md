@@ -45,7 +45,7 @@ This deep-dive forensic capability allows engineers to proactively remediate iss
 
 ## 📸 Platform Previews
 
-Take a look at the beautifully designed Next.js dashboard built to manage and monitor seamlessly:
+Take a look at the beautifully designed React dashboard built to manage and monitor seamlessly:
 
 <details>
 <summary><b>Click to expand and view screenshots</b></summary>
@@ -76,7 +76,7 @@ Take a look at the beautifully designed Next.js dashboard built to manage and mo
 RouteRX operates as a **distributed background-processing system** composed of independent, highly decoupled services. The UI is simply a presentation layer into the true product: a highly available monitoring engine.
 
 ```text
-User Dashboard (Next.js)
+User Dashboard (React + Vite)
         ↓
 API Layer (Node.js)
         ↓
@@ -108,10 +108,14 @@ Differentiates between various failures to identify actual root causes intellige
 | Failure Type | Description |
 | :--- | :--- |
 | `DNS_FAILURE` | Domain name fails to resolve |
-| `TCP_FAILURE` | Destination server is completely unreachable |
-| `TLS_FAILURE` | Certificate or secure handshake problem |
-| `HTTP_ERROR` | Server returned a 5xx or 4xx error code |
-| `TIMEOUT` | Server response exceeded predefined thresholds |
+| `TCP_CONNECTION_FAILED` | Destination server is completely unreachable |
+| `TLS_HANDSHAKE_FAILED` | Certificate expired, invalid, or HTTPS misconfigured |
+| `HTTP_5XX` / `HTTP_4XX` | Server returned an unexpected status code |
+| `ASSERTION_FAILED` | Status was fine but the response body was not |
+| `SLOW_RESPONSE` | Responding, but above the monitor's latency threshold |
+| `TIMEOUT` | Server response exceeded the monitor's timeout |
+| `REDIRECT_LOOP` | Still redirecting after five hops |
+| `BLOCKED_TARGET` | Resolved to a private or reserved address and was refused |
 
 #### 4️⃣ Incident Detection & Deduplication
 Incidents trigger exclusively upon consecutive failure runs. This logic prevents alert storms and false alarms typically caused by minor packet drops, temporary routing hiccups, or container cold starts.
@@ -122,8 +126,23 @@ RouteRX automatically extracts and validates SSL certificate metadata. It active
 #### 6️⃣ Maintenance Windows
 Prevent alerting engineers at 2AM for planned deployments with scheduled routing maintenance which natively suppresses alerts while seamlessly resuming once the window ends.
 
-#### 7️⃣ Public Status Pages
-Provides your customers with fully integrated, Vercel/GitHub styled status pages that exhibit true SLA uptimes and detailed incident history.
+#### 7️⃣ Content Assertions
+A check is more than "did it return 200". Each monitor carries its own method,
+headers, body, expected status codes and an optional body assertion
+(`contains`, `not_contains`, or a `json_path` equality), because a page that
+returns 200 while rendering an error is the outage that actually catches
+people out.
+
+#### 8️⃣ Team Workspaces
+Monitors, alert channels and incidents belong to a workspace. Teammates are
+invited by email with an owner, admin or read-only member role. Members can
+acknowledge an incident without being able to reconfigure monitoring.
+
+#### 9️⃣ Alert Routing
+Alerts fan out to email, Slack, Discord, or a signed generic webhook, per
+monitor or per workspace. Thresholds, a latency threshold, re-notification
+cadence and muting are configured per monitor, and every delivery attempt is
+recorded so "why didn't I get paged" has an answer.
 
 ---
 
@@ -141,10 +160,11 @@ The time-series performance data engine retains comprehensive metrics including:
 ## ⚙️ Technology Stack
 
 **Frontend Repository:** [routerx-web](https://github.com/Arka90/routerx-web)
-* Next.js (React)
+* React 19 + Vite
+* TanStack Router & TanStack Query
 * TypeScript
-* Tailored custom shadcn/ui design
-* Recharts Real-time visual data
+* Tailwind with a custom shadcn/ui-derived design
+* Recharts for real-time visualisation
 
 **Backend API (This Repository)**
 * Node.js & TypeScript
@@ -152,10 +172,11 @@ The time-series performance data engine retains comprehensive metrics including:
 * RESTful JSON endpoints
 
 **Infrastructure & Persistence**
-* PostgreSQL (Relational Persistence Layer)
-* Redis (Lightning-fast Caching)
-* BullMQ (Reliable Job Queue Workers)
+* PostgreSQL, through numbered transactional migrations
+* Redis + BullMQ for scheduling and workers
 * Docker & Docker Compose
+
+Upgrading an existing SQLite deployment? See [docs/UPGRADE.md](docs/UPGRADE.md).
 
 ---
 
@@ -174,16 +195,27 @@ Want to run the complete background processing stack locally?
 git clone https://github.com/Arka90/routerx-api.git
 cd routerx-api
 
-# 2. Setup your local environment variables
+# 2. Set up your local environment variables.
+#    DATABASE_URL and JWT_SECRET are required — the process refuses to start
+#    without them rather than falling back to a default.
 cp .env.example .env
 
 # 3. Spin up dependent infrastructure (PostgreSQL & Redis)
-docker compose up -d
+docker compose up -d postgres redis
 
-# 4. Install modular dependencies and boot up REST Server
+# 4. Install dependencies and boot the REST server.
+#    Migrations are applied before the listener opens.
 npm install
 npm run dev
 ```
+
+**Running the tests:**
+```bash
+npm test
+```
+No database needed — the suite runs against an in-process Postgres. Set
+`TEST_DATABASE_URL` to run the identical suite against a real server, which is
+what CI does.
 
 **Starting the Headless Monitoring Engine:**
 To start the workers that actually ingest and run probe queries, open a new terminal:
@@ -195,9 +227,13 @@ npm run worker
 
 ## 📌 Roadmap & Future Vision
 
+- [x] Team workspaces with roles and invitations
+- [x] Slack, Discord and signed webhook alerting
+- [x] Per-monitor alert policies and content assertions
+- [ ] Public status pages
 - [ ] Multi-region monitoring execution points
+- [ ] Billing and plan quotas
 - [ ] Advanced anomaly detection via ML
-- [ ] Dynamic Webhook payload integrations
 - [ ] Slack/Discord native bot notifications
 - [ ] External distributed probe clusters
 
