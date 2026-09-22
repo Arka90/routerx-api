@@ -9,6 +9,27 @@ jobs:
   test:
     runs-on: ubuntu-latest
 
+    # The suite defaults to an in-process Postgres, but CI runs it against a
+    # real server so the production `pg` driver and its type parsing are
+    # exercised too, not just the SQL.
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: routerx
+          POSTGRES_PASSWORD: routerx
+          POSTGRES_DB: routerx_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U routerx"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 10
+
+    env:
+      TEST_DATABASE_URL: postgres://routerx:routerx@localhost:5432/routerx_test
+
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -44,11 +65,13 @@ jobs:
           GENERAL_FROM: ${{ secrets.GENERAL_FROM }}
           JWT_SECRET: ${{ secrets.JWT_SECRET }}
           CORS_ORIGINS: ${{ secrets.CORS_ORIGINS }}
+          APP_URL: ${{ secrets.APP_URL }}
+          POSTGRES_PASSWORD: ${{ secrets.POSTGRES_PASSWORD }}
         with:
           host: ${{ secrets.SERVER_IP }}
           username: deploy
           key: ${{ secrets.SERVER_SSH_KEY }}
-          envs: SMTP_HOST,SMTP_PORT,SMTP_USER,SMTP_PASS,ALERT_FROM,GENERAL_FROM,JWT_SECRET,CORS_ORIGINS
+          envs: SMTP_HOST,SMTP_PORT,SMTP_USER,SMTP_PASS,ALERT_FROM,GENERAL_FROM,JWT_SECRET,CORS_ORIGINS,APP_URL,POSTGRES_PASSWORD
           script: |
 
             set -e
@@ -67,8 +90,14 @@ jobs:
             PORT=3000
             REDIS_HOST=redis
             TRUST_PROXY=1
+            APP_URL=$APP_URL
             CORS_ORIGINS=$CORS_ORIGINS
             PROBE_RETENTION_DAYS=30
+            WORKER_CONCURRENCY=10
+            POSTGRES_USER=routerx
+            POSTGRES_PASSWORD=$POSTGRES_PASSWORD
+            POSTGRES_DB=routerx
+            DATABASE_URL=postgres://routerx:$POSTGRES_PASSWORD@postgres:5432/routerx
             SMTP_HOST=$SMTP_HOST
             SMTP_PORT=$SMTP_PORT
             SMTP_USER=$SMTP_USER

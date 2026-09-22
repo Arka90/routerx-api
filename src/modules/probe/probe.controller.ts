@@ -1,6 +1,6 @@
 import { Response } from "express";
 import { z } from "zod";
-import { runFullProbe } from "./probe.service";
+import { DEFAULT_CHECK, runCheck } from "./probe.service";
 import { AuthRequest } from "../auth/auth.middleware";
 import { BlockedTargetError, resolveProbeTarget } from "../../core/security/ssrf";
 import { rateLimit } from "../../core/http/rate-limit";
@@ -10,8 +10,8 @@ const querySchema = z.object({
 });
 
 /**
- * An on-demand probe costs a DNS lookup plus up to three outbound
- * connections, so it gets a tighter budget than the global limiter.
+ * An ad-hoc probe costs a DNS lookup plus up to three outbound connections,
+ * so it gets a tighter budget than the global limiter.
  */
 export const probeRateLimit = rateLimit("probe", {
   windowMs: 60 * 1000,
@@ -19,6 +19,7 @@ export const probeRateLimit = rateLimit("probe", {
   message: "Too many probe requests. Try again shortly.",
 });
 
+/** One-off check of a URL, used by the "test this before saving" flow. */
 export async function probeController(req: AuthRequest, res: Response) {
   const parsed = querySchema.safeParse(req.query);
 
@@ -37,7 +38,7 @@ export async function probeController(req: AuthRequest, res: Response) {
     throw error;
   }
 
-  const result = await runFullProbe(parsed.data.url);
+  const outcome = await runCheck({ ...DEFAULT_CHECK, url: parsed.data.url });
 
-  res.json(result);
+  res.json(outcome);
 }

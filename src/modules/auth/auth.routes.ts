@@ -1,6 +1,15 @@
 import { Router } from "express";
-import { requestLink, verify } from "./auth.controller";
+import {
+  listSessionsHandler,
+  logout,
+  me,
+  requestLink,
+  revokeOtherSessionsHandler,
+  revokeSessionHandler,
+  verify,
+} from "./auth.controller";
 import { rateLimit } from "../../core/http/rate-limit";
+import { requireAuth } from "./auth.middleware";
 
 const router = Router();
 
@@ -49,5 +58,12 @@ router.post(
   }),
   verify
 );
+
+router.get("/me", requireAuth, me);
+router.post("/logout", requireAuth, logout);
+
+router.get("/sessions", requireAuth, listSessionsHandler);
+router.delete("/sessions/:sessionId", requireAuth, revokeSessionHandler);
+router.post("/sessions/revoke-others", requireAuth, revokeOtherSessionsHandler);
 
 export default router;

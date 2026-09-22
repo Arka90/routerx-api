@@ -1,19 +1,42 @@
 import { Router } from "express";
 import { requireAuth } from "../auth/auth.middleware";
-import { addMonitor, listMonitors, updateMonitorHandler, deleteMonitorHandler, getMonitorHandler, scheduleMaintenance, removeMaintenance, getMaintenance, getMonitorProbes } from "./monitor.controller";
+import { requireOrg, requireRole } from "../org/org.middleware";
+import {
+  addMonitor,
+  deleteMonitorHandler,
+  getMaintenance,
+  getMonitorHandler,
+  getMonitorProbes,
+  getPolicyHandler,
+  listDeliveries,
+  listMonitorsHandler,
+  removeMaintenance,
+  scheduleMaintenance,
+  updateMonitorHandler,
+  updatePolicyHandler,
+} from "./monitor.controller";
 
 const router = Router();
 
-router.post("/", requireAuth, addMonitor);
-router.get("/", requireAuth, listMonitors);
-router.get("/:id", requireAuth, getMonitorHandler);
-router.patch("/:id", requireAuth, updateMonitorHandler);
-router.delete("/:id", requireAuth, deleteMonitorHandler);
-router.get("/:id/probes", requireAuth, getMonitorProbes);
+// Every route is organization-scoped. Members can read; changing what is
+// monitored, or how it alerts, takes admin.
+router.use(requireAuth, requireOrg);
 
-// Maintenance
-router.get("/:id/maintenance", requireAuth, getMaintenance);
-router.post("/:id/maintenance", requireAuth, scheduleMaintenance);
-router.delete("/:id/maintenance", requireAuth, removeMaintenance);
+router.get("/", listMonitorsHandler);
+router.post("/", requireRole("admin"), addMonitor);
+
+router.get("/:id", getMonitorHandler);
+router.patch("/:id", requireRole("admin"), updateMonitorHandler);
+router.delete("/:id", requireRole("admin"), deleteMonitorHandler);
+
+router.get("/:id/probes", getMonitorProbes);
+router.get("/:id/deliveries", listDeliveries);
+
+router.get("/:id/policy", getPolicyHandler);
+router.put("/:id/policy", requireRole("admin"), updatePolicyHandler);
+
+router.get("/:id/maintenance", getMaintenance);
+router.post("/:id/maintenance", requireRole("admin"), scheduleMaintenance);
+router.delete("/:id/maintenance", requireRole("admin"), removeMaintenance);
 
 export default router;

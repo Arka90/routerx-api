@@ -1,34 +1,43 @@
 import { Request, Response, NextFunction } from "express";
-import jwt from "jsonwebtoken";
-import { config } from "../../core/config";
+import { resolveSession, type SessionUser } from "./session.service";
 
 export interface AuthRequest extends Request {
-  user?: {
-    id: number;
-    email: string;
-  };
+  user?: SessionUser;
+  sessionId?: number;
+  /** Set by requireOrg. */
+  orgId?: number;
+  orgName?: string;
+  orgRole?: "owner" | "admin" | "member";
 }
 
-export function requireAuth(req: AuthRequest, res: Response, next: NextFunction) {
+export async function requireAuth(
+  req: AuthRequest,
+  res: Response,
+  next: NextFunction
+) {
   const authHeader = req.headers.authorization;
 
   if (!authHeader || !authHeader.startsWith("Bearer ")) {
     return res.status(401).json({ error: "Unauthorized" });
   }
 
-  const token = authHeader.split(" ")[1];
+  const token = authHeader.slice("Bearer ".length).trim();
 
   try {
-    const decoded = jwt.verify(token, config.jwtSecret) as { id: number; email: string };
-    
-    // attach user to request
-    req.user = {
-      id: decoded.id,
-      email: decoded.email,
-    };
+    const session = await resolveSession(token);
+
+    // A revoked or expired session lands here too, which is the point: the
+    // token alone is no longer proof of anything.
+    if (!session) {
+      return res.status(401).json({ error: "Session expired or revoked" });
+    }
+
+    req.user = session.user;
+    req.sessionId = session.sessionId;
 
     next();
   } catch (error) {
-    return res.status(401).json({ error: "Invalid or expired token" });
+    console.error("Session lookup failed:", error);
+    res.status(503).json({ error: "Could not verify your session right now" });
   }
 }

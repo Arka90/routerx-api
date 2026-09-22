@@ -15,6 +15,7 @@
   "author": "",
   "license": "ISC",
   "dependencies": {
+    "@types/pg": "^8.23.1",
     "better-sqlite3": "^12.6.2",
     "bullmq": "^5.69.3",
     "cors": "^2.8.6",
@@ -23,9 +24,11 @@
     "ioredis": "^5.9.3",
     "jsonwebtoken": "^9.0.3",
     "nodemailer": "^8.0.1",
+    "pg": "^8.23.0",
     "zod": "^4.3.6"
   },
   "devDependencies": {
+    "@electric-sql/pglite": "^0.5.8",
     "@types/better-sqlite3": "^7.6.13",
     "@types/cors": "^2.8.19",
     "@types/express": "^5.0.6",

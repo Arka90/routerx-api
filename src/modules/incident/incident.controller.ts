@@ -2,54 +2,89 @@ import { Response } from "express";
 import { AuthRequest } from "../auth/auth.middleware";
 import { getMonitor } from "../monitor/monitor.service";
 import {
-  getIncidentsByMonitor,
-  getOpenIncident,
+  acknowledgeIncident,
   calculateUptime,
+  getOpenIncident,
+  listIncidents,
+  listOrgIncidents,
 } from "./incident.service";
 
-/**
- * GET /incidents/:monitorId
- * List all incidents for a monitor (must belong to the authenticated user).
- */
-export function listIncidents(req: AuthRequest, res: Response) {
-  const monitorId = Number(req.params.monitorId);
-  const monitor = getMonitor(req.user!.id, monitorId);
+async function requireMonitorScope(req: AuthRequest, res: Response, rawId: unknown) {
+  const monitorId = Number(rawId);
 
-  if (!monitor) {
-    return res.status(404).json({ error: "Monitor not found" });
+  if (!Number.isInteger(monitorId) || monitorId <= 0) {
+    res.status(400).json({ error: "Invalid monitor id" });
+    return null;
   }
 
-  const incidents = getIncidentsByMonitor(monitorId);
-  const openIncident = getOpenIncident(monitorId);
+  const monitor = await getMonitor(req.orgId!, monitorId);
+
+  if (!monitor) {
+    res.status(404).json({ error: "Monitor not found" });
+    return null;
+  }
+
+  return monitor;
+}
+
+/**
+ * Every incident in the workspace, in one request.
+ *
+ * The incidents page previously fetched monitors and then issued one request
+ * per monitor, discarding those with no incidents.
+ */
+export async function listAllIncidents(req: AuthRequest, res: Response) {
+  const limit = Math.min(500, Math.max(1, Number(req.query.limit) || 100));
+  const openOnly = req.query.open === "true";
+
+  const incidents = await listOrgIncidents(req.orgId!, { limit, openOnly });
+
+  res.json({ total: incidents.length, incidents });
+}
+
+export async function listIncidentsHandler(req: AuthRequest, res: Response) {
+  const monitor = await requireMonitorScope(req, res, req.params.monitorId);
+  if (!monitor) return;
+
+  const incidents = await listIncidents(monitor.id);
 
   res.json({
-    monitor_id: monitorId,
-    open_incident: openIncident,
+    monitor_id: monitor.id,
+    open_incident: await getOpenIncident(monitor.id),
     total: incidents.length,
     incidents,
   });
 }
 
-/**
- * GET /incidents/:monitorId/uptime?hours=24
- * Returns uptime percentage over a rolling window.
- */
-export function getUptimeHandler(req: AuthRequest, res: Response) {
-  const monitorId = Number(req.params.monitorId);
-  const monitor = getMonitor(req.user!.id, monitorId);
+export async function getUptimeHandler(req: AuthRequest, res: Response) {
+  const monitor = await requireMonitorScope(req, res, req.params.monitorId);
+  if (!monitor) return;
 
-  if (!monitor) {
-    return res.status(404).json({ error: "Monitor not found" });
-  }
-
-  // Capped at a year: the window is only used to size a division, but an
-  // unbounded value is free to send and makes the number meaningless.
+  // Capped at a year: the window only sizes a division, but an unbounded
+  // value is free to send and makes the number meaningless.
   const hours = Math.min(8760, Math.max(1, Number(req.query.hours) || 24));
-  const uptime = calculateUptime(monitorId, hours);
 
   res.json({
-    monitor_id: monitorId,
+    monitor_id: monitor.id,
     url: monitor.url,
-    ...uptime,
+    ...(await calculateUptime(monitor.id, hours)),
   });
+}
+
+export async function acknowledgeHandler(req: AuthRequest, res: Response) {
+  const incidentId = Number(req.params.incidentId);
+
+  if (!Number.isInteger(incidentId)) {
+    return res.status(400).json({ error: "Invalid incident id" });
+  }
+
+  const incident = await acknowledgeIncident(req.orgId!, incidentId, req.user!.id);
+
+  if (!incident) {
+    return res
+      .status(404)
+      .json({ error: "Incident not found, or it was already acknowledged" });
+  }
+
+  res.json({ message: "Incident acknowledged", incident });
 }
