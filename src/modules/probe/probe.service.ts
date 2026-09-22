@@ -1,5 +1,6 @@
 import { probeDNS, probeTCP, probeTLS, probeHTTP } from "../../domain/probe";
 import { analyze } from "../../domain/analyzer";
+import { isAllowedAddress } from "../../core/security/ssrf";
 
 export async function runFullProbe(url: string) {
   const parsed = new URL(url);
@@ -11,6 +12,28 @@ export async function runFullProbe(url: string) {
     : 80;
 
   const dnsResult = await probeDNS(url);
+
+  /**
+   * Validation at monitor-creation time is not sufficient on its own: a
+   * hostname that resolved to a public address then can be re-pointed at
+   * 127.0.0.1 or 169.254.169.254 afterwards, and this runner is what the
+   * scheduled worker calls every interval. Check the address we are actually
+   * about to connect to, every time.
+   */
+  if (dnsResult.success && dnsResult.ip && !isAllowedAddress(dnsResult.ip)) {
+    return {
+      dns: dnsResult,
+      tcp: null,
+      tls: null,
+      http: null,
+      blocked: true,
+      diagnosis: {
+        status: "DOWN" as const,
+        reason: "BLOCKED_TARGET",
+        message: `${parsed.hostname} resolves to a private or reserved address (${dnsResult.ip}). Probing was refused.`,
+      },
+    };
+  }
 
   let tcpResult = null;
   let tlsResult = null;
@@ -25,7 +48,9 @@ export async function runFullProbe(url: string) {
   }
 
   if ((!isHttps && tcpResult?.success) || (isHttps && tlsResult?.success)) {
-    httpResult = await probeHTTP(url);
+    // Pinned to the address we just validated, so the HTTP leg cannot be
+    // steered somewhere else by a second DNS answer.
+    httpResult = await probeHTTP(url, dnsResult.ip ?? undefined);
   }
 
   const diagnosis = analyze({
@@ -41,6 +66,7 @@ export async function runFullProbe(url: string) {
     tcp: tcpResult,
     tls: tlsResult,
     http: httpResult,
-    diagnosis
+    blocked: false,
+    diagnosis,
   };
 }

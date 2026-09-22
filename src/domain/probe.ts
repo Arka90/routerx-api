@@ -108,7 +108,13 @@ export function probeTLS(
 
 /* ---------------- HTTP / TTFB ---------------- */
 
-export function probeHTTP(url: string): Promise<{
+/**
+ * @param pinnedIp Address the caller already resolved and validated. Passing
+ * it stops Node from performing its own lookup, which would reopen the
+ * DNS-rebinding window the SSRF guard exists to close. SNI and certificate
+ * validation still use the hostname.
+ */
+export function probeHTTP(url: string, pinnedIp?: string): Promise<{
   success: boolean;
   statusCode: number | null;
   ttfb: number | null;
@@ -122,9 +128,21 @@ export function probeHTTP(url: string): Promise<{
     const req = lib.request(
       {
         hostname: parsed.hostname,
-        path: parsed.pathname || "/",
+        path: `${parsed.pathname || "/"}${parsed.search}`,
         method: "GET",
         port: parsed.port || (parsed.protocol === "https:" ? 443 : 80),
+        timeout: 10_000,
+        lookup: pinnedIp
+          ? (_hostname, options, callback) => {
+              const family = net.isIP(pinnedIp);
+              // Node's overloads differ on `all`; both shapes land here.
+              if (typeof options === "object" && options?.all) {
+                (callback as any)(null, [{ address: pinnedIp, family }]);
+              } else {
+                (callback as any)(null, pinnedIp, family);
+              }
+            }
+          : undefined,
       },
       (res) => {
         const firstByte = performance.now();
@@ -139,6 +157,15 @@ export function probeHTTP(url: string): Promise<{
         res.destroy();
       }
     );
+
+    req.on("timeout", () => {
+      req.destroy();
+      resolve({
+        success: false,
+        statusCode: null,
+        ttfb: null,
+      });
+    });
 
     req.on("error", () => {
       resolve({

@@ -8,6 +8,7 @@ import { resolveIncident } from "../incident/incident.service";
 import { db } from "../../core/db/client";
 import { removeMonitorJob, scheduleMonitor } from "../../core/queue/schedulers/monitor.scheduler";
 import { isInMaintenance } from "../../domain/maintenance/maintenance.checker";
+import { BlockedTargetError, resolveProbeTarget } from "../../core/security/ssrf";
 
 const monitorSchema = z.object({
   url: z.string().url(),
@@ -17,6 +18,11 @@ const monitorSchema = z.object({
 export async function addMonitor(req: AuthRequest, res: Response) {
   try {
     const { url, interval_seconds } = monitorSchema.parse(req.body);
+
+    // zod validates the shape of the URL, not where it points. Without this,
+    // a monitor on http://127.0.0.1:6379 or the cloud metadata endpoint turns
+    // the scheduled worker into a recurring SSRF.
+    await resolveProbeTarget(url);
 
     const monitor = createMonitor(req.user!.id, url, interval_seconds);
 
@@ -34,6 +40,10 @@ export async function addMonitor(req: AuthRequest, res: Response) {
   } catch (error: any) {
     if (error instanceof z.ZodError) {
       res.status(400).json({ error: error.format() });
+      return;
+    }
+    if (error instanceof BlockedTargetError) {
+      res.status(400).json({ error: error.message });
       return;
     }
     if (error.message === "Monitor already exists") {
@@ -87,8 +97,20 @@ export async function updateMonitorHandler(req: AuthRequest, res: Response) {
   const { url, interval_seconds } = req.body;
 
   try {
-    if (url && !z.string().url().safeParse(url).success) {
-      return res.status(400).json({ error: "Invalid URL" });
+    if (url !== undefined) {
+      if (!z.string().url().safeParse(url).success) {
+        return res.status(400).json({ error: "Invalid URL" });
+      }
+      await resolveProbeTarget(url);
+    }
+
+    if (
+      interval_seconds !== undefined &&
+      !z.number().int().min(30).max(3600).safeParse(interval_seconds).success
+    ) {
+      return res
+        .status(400)
+        .json({ error: "interval_seconds must be a whole number between 30 and 3600" });
     }
 
     const updatedMonitor = updateMonitor(
@@ -109,6 +131,9 @@ export async function updateMonitorHandler(req: AuthRequest, res: Response) {
 
     res.json(updatedMonitor);
   } catch (error: any) {
+    if (error instanceof BlockedTargetError) {
+      return res.status(400).json({ error: error.message });
+    }
     if (error.message === "Monitor not found or unauthorized" || error.message === "Monitor not found") {
       return res.status(404).json({ error: "Monitor not found" });
     }
@@ -144,10 +169,33 @@ export async function deleteMonitorHandler(req: AuthRequest, res: Response) {
 }
 
 
+const maintenanceSchema = z
+  .object({
+    starts_at: z.string().datetime({ offset: true }),
+    ends_at: z.string().datetime({ offset: true }),
+    reason: z.string().trim().max(500).optional(),
+  })
+  .refine((data) => new Date(data.ends_at) > new Date(data.starts_at), {
+    message: "ends_at must be after starts_at",
+    path: ["ends_at"],
+  });
+
 export function scheduleMaintenance(req: AuthRequest, res: Response) {
   const { id } = req.params;
   const monitorId = parseInt(id as string);
-  const { starts_at, ends_at, reason } = req.body;
+
+  // This went straight from the body into the INSERT before, so any string at
+  // all could be stored as a window and isInMaintenance() would compare
+  // garbage against an ISO timestamp.
+  const parsed = maintenanceSchema.safeParse(req.body);
+
+  if (!parsed.success) {
+    return res.status(400).json({
+      error: parsed.error.issues[0]?.message ?? "Invalid maintenance window",
+    });
+  }
+
+  const { starts_at, ends_at, reason } = parsed.data;
 
   try {
     // verify monitor belongs to user
@@ -163,7 +211,15 @@ export function scheduleMaintenance(req: AuthRequest, res: Response) {
     db.prepare(`
       INSERT INTO maintenance_windows (monitor_id, starts_at, ends_at, reason)
       VALUES (?, ?, ?, ?)
-    `).run(monitorId, starts_at, ends_at, reason ?? null);
+    `).run(
+      monitorId,
+      // Normalized to UTC ISO: isInMaintenance() compares these as strings
+      // against new Date().toISOString(), so a different offset format would
+      // silently compare wrong.
+      new Date(starts_at).toISOString(),
+      new Date(ends_at).toISOString(),
+      reason ?? null
+    );
 
     // update the maintenance flag based on whether it is CURRENTLY in maintenance
     const inMaintenance = isInMaintenance(monitorId);
