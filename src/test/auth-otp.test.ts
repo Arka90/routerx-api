@@ -1,22 +1,17 @@
 import { describe, it, expect, beforeEach, vi } from "vitest";
 
-// The service sends mail on every request; the transport is stubbed so the
-// suite exercises the code logic without an SMTP server. vi.mock is hoisted
-// above the imports, so the spy has to be hoisted with it.
-const { sendMail } = vi.hoisted(() => ({
-  sendMail: vi.fn().mockResolvedValue({}),
+// vi.mock is hoisted above the imports, so the spy has to be hoisted with it.
+const { sendMail } = vi.hoisted(() => ({ sendMail: vi.fn().mockResolvedValue({}) }));
+
+vi.mock("../core/mail/mailer", async (importOriginal) => ({
+  ...(await importOriginal<object>()),
+  sendMail,
 }));
 
-vi.mock("nodemailer", () => ({
-  default: { createTransport: () => ({ sendMail }) },
-}));
-
-import { db } from "../core/db/client";
-import { runMigrations } from "../core/db/migrate";
 import { requestOtp, verifyOtp } from "../modules/auth/auth.service";
+import { resolveSession } from "../modules/auth/session.service";
 import { config } from "../core/config";
-
-runMigrations();
+import { query, queryOne, resetDatabase } from "./helpers/db";
 
 const EMAIL = "otp-test@example.com";
 
@@ -29,14 +24,18 @@ function lastCode(): string {
   return match[1];
 }
 
-function userId(): number {
-  return (db.prepare("SELECT id FROM users WHERE email = ?").get(EMAIL) as any).id;
+async function userId(): Promise<number> {
+  const row = await queryOne<{ id: number }>(
+    `SELECT id FROM users WHERE email = $1`,
+    [EMAIL]
+  );
+  return row!.id;
 }
 
 describe("login codes", () => {
-  beforeEach(() => {
+  beforeEach(async () => {
+    await resetDatabase();
     sendMail.mockClear();
-    db.prepare("DELETE FROM users WHERE email = ?").run(EMAIL);
   });
 
   it("issues a code of the configured length and never stores it in the clear", async () => {
@@ -45,20 +44,21 @@ describe("login codes", () => {
     const code = lastCode();
     expect(code).toHaveLength(config.otp.length);
 
-    const row = db
-      .prepare("SELECT code_hash FROM otp_codes WHERE user_id = ?")
-      .get(userId()) as any;
+    const rows = await query<{ code_hash: string }>(
+      `SELECT code_hash FROM otp_codes WHERE user_id = $1`,
+      [await userId()]
+    );
 
-    expect(row.code_hash).not.toContain(code);
-    expect(row.code_hash).toHaveLength(64); // sha256 hex
+    expect(rows[0].code_hash).not.toContain(code);
+    expect(rows[0].code_hash).toHaveLength(64); // sha256 hex
   });
 
   it("accepts the right code once, then refuses to replay it", async () => {
     await requestOtp(EMAIL);
     const code = lastCode();
 
-    expect(verifyOtp(EMAIL, code)).not.toBeNull();
-    expect(verifyOtp(EMAIL, code)).toBeNull();
+    expect(await verifyOtp(EMAIL, code)).not.toBeNull();
+    expect(await verifyOtp(EMAIL, code)).toBeNull();
   });
 
   it("burns the code after the attempt cap, so the right code no longer works", async () => {
@@ -67,13 +67,15 @@ describe("login codes", () => {
     const wrong = code === "000000" ? "111111" : "000000";
 
     for (let attempt = 0; attempt < config.otp.maxAttempts; attempt++) {
-      expect(verifyOtp(EMAIL, wrong)).toBeNull();
+      expect(await verifyOtp(EMAIL, wrong)).toBeNull();
     }
 
-    expect(verifyOtp(EMAIL, code)).toBeNull();
-    expect(
-      db.prepare("SELECT COUNT(*) AS n FROM otp_codes WHERE user_id = ?").get(userId())
-    ).toEqual({ n: 0 });
+    expect(await verifyOtp(EMAIL, code)).toBeNull();
+
+    const remaining = await query(`SELECT id FROM otp_codes WHERE user_id = $1`, [
+      await userId(),
+    ]);
+    expect(remaining).toHaveLength(0);
   });
 
   it("invalidates the previous code when a new one is requested", async () => {
@@ -83,28 +85,53 @@ describe("login codes", () => {
     await requestOtp(EMAIL);
     const second = lastCode();
 
-    expect(verifyOtp(EMAIL, first)).toBeNull();
-    expect(verifyOtp(EMAIL, second)).not.toBeNull();
+    expect(await verifyOtp(EMAIL, first)).toBeNull();
+    expect(await verifyOtp(EMAIL, second)).not.toBeNull();
   });
 
   it("rejects an expired code", async () => {
     await requestOtp(EMAIL);
     const code = lastCode();
 
-    db.prepare("UPDATE otp_codes SET expires_at = ? WHERE user_id = ?").run(
-      new Date(Date.now() - 1000).toISOString(),
-      userId()
-    );
+    await query(`UPDATE otp_codes SET expires_at = now() - interval '1 minute'`);
 
-    expect(verifyOtp(EMAIL, code)).toBeNull();
+    expect(await verifyOtp(EMAIL, code)).toBeNull();
   });
 
   it("treats the address case-insensitively", async () => {
     await requestOtp(EMAIL.toUpperCase());
-    expect(verifyOtp(EMAIL, lastCode())).not.toBeNull();
+    expect(await verifyOtp(EMAIL, lastCode())).not.toBeNull();
   });
 
-  it("returns null for an address that was never issued a code", () => {
-    expect(verifyOtp("nobody@example.com", "123456")).toBeNull();
+  it("returns null for an address that was never issued a code", async () => {
+    expect(await verifyOtp("nobody@example.com", "123456")).toBeNull();
+  });
+
+  it("gives a first-time user a workspace they own", async () => {
+    await requestOtp(EMAIL);
+    const result = await verifyOtp(EMAIL, lastCode());
+
+    expect(result!.organizations).toHaveLength(1);
+    expect(result!.organizations[0].role).toBe("owner");
+  });
+
+  it("issues a session token that resolves to the user", async () => {
+    await requestOtp(EMAIL);
+    const result = await verifyOtp(EMAIL, lastCode());
+
+    const session = await resolveSession(result!.token);
+
+    expect(session).not.toBeNull();
+    expect(session!.user.email).toBe(EMAIL);
+  });
+
+  it("does not put the raw session token in the database", async () => {
+    await requestOtp(EMAIL);
+    const result = await verifyOtp(EMAIL, lastCode());
+
+    const rows = await query<{ token_hash: string }>(`SELECT token_hash FROM sessions`);
+
+    expect(rows).toHaveLength(1);
+    expect(rows[0].token_hash).not.toBe(result!.token);
   });
 });

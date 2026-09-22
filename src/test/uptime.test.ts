@@ -1,51 +1,39 @@
 import { describe, it, expect, beforeEach } from "vitest";
-import { db } from "../core/db/client";
-import { runMigrations } from "../core/db/migrate";
 import { calculateUptime } from "../modules/incident/incident.service";
-
-runMigrations();
-
-const EMAIL = "uptime-test@example.com";
-
-function seedMonitor(createdAt: Date): number {
-  db.prepare("INSERT OR IGNORE INTO users (email) VALUES (?)").run(EMAIL);
-  const user = db.prepare("SELECT id FROM users WHERE email = ?").get(EMAIL) as any;
-
-  const result = db
-    .prepare(
-      `INSERT INTO monitors (user_id, url, interval_seconds, created_at)
-       VALUES (?, ?, 60, ?)`
-    )
-    .run(user.id, `https://example.com/${Date.now()}-${Math.random()}`, createdAt.toISOString());
-
-  return Number(result.lastInsertRowid);
-}
-
-function seedIncident(monitorId: number, startedAt: Date, resolvedAt: Date | null) {
-  db.prepare(
-    `INSERT INTO incidents (monitor_id, started_at, resolved_at) VALUES (?, ?, ?)`
-  ).run(monitorId, startedAt.toISOString(), resolvedAt ? resolvedAt.toISOString() : null);
-}
+import {
+  addIncident,
+  createMonitor,
+  createUserAndOrg,
+  resetDatabase,
+} from "./helpers/db";
 
 const HOUR = 60 * 60 * 1000;
 
 describe("uptime calculation", () => {
-  beforeEach(() => {
-    db.prepare("DELETE FROM users WHERE email = ?").run(EMAIL);
+  let orgId: number;
+
+  beforeEach(async () => {
+    await resetDatabase();
+    ({ orgId } = await createUserAndOrg());
   });
 
-  it("reports 100% for a monitor with no incidents", () => {
-    const id = seedMonitor(new Date(Date.now() - 48 * HOUR));
-    expect(calculateUptime(id, 24).uptime_percentage).toBe(100);
+  it("reports 100% for a monitor with no incidents", async () => {
+    const id = await createMonitor(orgId);
+    const result = await calculateUptime(id, 24);
+
+    expect(result.uptime_percentage).toBe(100);
+    expect(result.total_downtime_seconds).toBe(0);
   });
 
-  it("measures only the time since the monitor was created", () => {
-    // Created 2 hours ago, down for 1 of them. Over a 30-day window the old
-    // implementation divided by the full 720 hours and reported ~99.86%.
-    const id = seedMonitor(new Date(Date.now() - 2 * HOUR));
-    seedIncident(id, new Date(Date.now() - 2 * HOUR), new Date(Date.now() - HOUR));
+  it("measures only the time since the monitor was created", async () => {
+    // Created 2 hours ago, down for 1 of them. Dividing by the full 30-day
+    // window would report ~99.86%.
+    const id = await createMonitor(orgId, {
+      created_at: new Date(Date.now() - 2 * HOUR),
+    });
+    await addIncident(id, new Date(Date.now() - 2 * HOUR), new Date(Date.now() - HOUR));
 
-    const result = calculateUptime(id, 720);
+    const result = await calculateUptime(id, 720);
 
     expect(result.uptime_percentage).toBeGreaterThan(45);
     expect(result.uptime_percentage).toBeLessThan(55);
@@ -53,24 +41,37 @@ describe("uptime calculation", () => {
     expect(result.window_hours).toBe(720);
   });
 
-  it("counts an unresolved incident as downtime up to now", () => {
-    const id = seedMonitor(new Date(Date.now() - 48 * HOUR));
-    seedIncident(id, new Date(Date.now() - 12 * HOUR), null);
+  it("counts an unresolved incident as downtime up to now", async () => {
+    const id = await createMonitor(orgId);
+    await addIncident(id, new Date(Date.now() - 12 * HOUR), null);
 
-    const result = calculateUptime(id, 24);
+    const result = await calculateUptime(id, 24);
 
     expect(result.uptime_percentage).toBeGreaterThan(45);
     expect(result.uptime_percentage).toBeLessThan(55);
   });
 
-  it("clips an incident that began before the window", () => {
-    const id = seedMonitor(new Date(Date.now() - 30 * 24 * HOUR));
-    seedIncident(id, new Date(Date.now() - 48 * HOUR), new Date(Date.now() - 12 * HOUR));
+  it("clips an incident that began before the window", async () => {
+    const id = await createMonitor(orgId);
+    await addIncident(
+      id,
+      new Date(Date.now() - 48 * HOUR),
+      new Date(Date.now() - 12 * HOUR)
+    );
 
     // Only the 12 hours inside the 24-hour window should count.
-    const result = calculateUptime(id, 24);
+    const result = await calculateUptime(id, 24);
 
     expect(result.uptime_percentage).toBeGreaterThan(45);
     expect(result.uptime_percentage).toBeLessThan(55);
+  });
+
+  it("never reports a negative percentage when downtime spans the window", async () => {
+    const id = await createMonitor(orgId);
+    await addIncident(id, new Date(Date.now() - 72 * HOUR), null);
+
+    const result = await calculateUptime(id, 24);
+
+    expect(result.uptime_percentage).toBe(0);
   });
 });
