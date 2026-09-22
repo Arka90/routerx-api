@@ -1,6 +1,15 @@
 import { execute, query } from "../../core/db/client";
 import { config } from "../../core/config";
-import { ALERT_FROM, emailLayout, sendMail } from "../../core/mail/mailer";
+import {
+  ALERT_FROM,
+  emailButton,
+  emailLayout,
+  emailParagraph,
+  emailPill,
+  emailTable,
+  escapeHtml,
+  sendMail,
+} from "../../core/mail/mailer";
 
 type Event = "opened" | "resolved";
 
@@ -67,10 +76,38 @@ export async function announceIncident(
           ? `${target.page_name}: ${target.component} is having problems`
           : `${target.page_name}: ${target.component} is back to normal`;
 
-      const body =
-        event === "opened"
-          ? `We're investigating an issue affecting <strong>${escapeHtml(target.component)}</strong>.`
-          : `<strong>${escapeHtml(target.component)}</strong> is operating normally again.`;
+      const opened = event === "opened";
+
+      const html = emailLayout(
+        opened
+          ? `${escapeHtml(target.component)} is having problems`
+          : `${escapeHtml(target.component)} is back to normal`,
+        emailParagraph(
+          opened
+            ? `We're investigating an issue affecting <strong>${escapeHtml(target.component)}</strong>. Updates will be posted on the status page as we learn more.`
+            : `<strong>${escapeHtml(target.component)}</strong> is operating normally again. Thanks for your patience.`
+        ) +
+          emailTable(
+            [
+              { label: "Component", value: escapeHtml(target.component) },
+              {
+                label: "Status",
+                value: emailPill(opened ? "Investigating" : "Resolved", opened ? "down" : "up"),
+              },
+              { label: "Status page", value: escapeHtml(target.page_name) },
+            ],
+            { tone: opened ? "down" : "up" }
+          ) +
+          emailButton(pageUrl, "View status page"),
+        {
+          eyebrow: "Status update",
+          tone: opened ? "down" : "up",
+          preheader: opened
+            ? `${target.component} is having problems. We're investigating.`
+            : `${target.component} is operating normally again.`,
+          footerNote: `You subscribed to updates from ${escapeHtml(target.page_name)}. Every message includes an unsubscribe link in the status page footer.`,
+        }
+      );
 
       // One message per subscriber: a shared To: header would leak the whole
       // subscriber list, and each unsubscribe link is individual anyway.
@@ -80,18 +117,7 @@ export async function announceIncident(
             from: ALERT_FROM,
             to: subscriber.email,
             subject,
-            html: emailLayout(
-              subject,
-              `
-                <p style="font-size:14px;line-height:1.6;color:#333">${body}</p>
-                <p style="margin:24px 0">
-                  <a href="${pageUrl}"
-                     style="display:inline-block;background:#111;color:#fff;text-decoration:none;padding:10px 18px;border-radius:6px;font-size:13px;font-weight:500">
-                    View status page
-                  </a>
-                </p>
-              `
-            ),
+            html,
           });
         } catch (error) {
           console.error(`Status page email to ${subscriber.email} failed:`, error);
@@ -101,12 +127,4 @@ export async function announceIncident(
       console.error(`Status page announcement failed for page ${target.status_page_id}:`, error);
     }
   }
-}
-
-function escapeHtml(value: string): string {
-  return value
-    .replace(/&/g, "&amp;")
-    .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;")
-    .replace(/"/g, "&quot;");
 }

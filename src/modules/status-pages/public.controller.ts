@@ -2,7 +2,14 @@ import { Request, Response } from "express";
 import { z } from "zod";
 import { queryOne } from "../../core/db/client";
 import { config } from "../../core/config";
-import { emailLayout, sendMail } from "../../core/mail/mailer";
+import {
+  emailButton,
+  emailLayout,
+  emailLink,
+  emailParagraph,
+  escapeHtml,
+  sendMail,
+} from "../../core/mail/mailer";
 import { buildPublicStatusPage } from "./public-view.service";
 import {
   confirmSubscription,
@@ -54,28 +61,29 @@ export async function subscribeHandler(req: Request, res: Response) {
   // test which addresses follow a given company's status page.
   if (!subscription.alreadyConfirmed) {
     const confirmUrl = `${config.appUrl}/status/confirm/${subscription.confirmToken}`;
+    const unsubscribeUrl = `${config.appUrl}/status/unsubscribe/${subscription.unsubscribeToken}`;
 
     try {
       await sendMail({
         to: parsed.data.email,
         subject: `Confirm your subscription to ${page.name}`,
         html: emailLayout(
-          `Confirm your subscription`,
-          `
-            <p style="font-size:14px;line-height:1.6;color:#333">
-              Confirm that you'd like updates when <strong>${escapeHtml(page.name)}</strong>
-              has an incident.
-            </p>
-            <p style="margin:24px 0">
-              <a href="${confirmUrl}"
-                 style="display:inline-block;background:#111;color:#fff;text-decoration:none;padding:10px 18px;border-radius:6px;font-size:13px;font-weight:500">
-                Confirm subscription
-              </a>
-            </p>
-            <p style="font-size:13px;color:#666">
-              If you didn't request this, ignore this email — nothing will be sent.
-            </p>
-          `
+          "Confirm your subscription",
+          emailParagraph(
+            `Confirm that you'd like an email when <strong>${escapeHtml(page.name)}</strong>
+             has an incident, and another when it's resolved.`
+          ) +
+            emailButton(confirmUrl, "Confirm subscription") +
+            emailParagraph(
+              `If you didn't request this, ignore this email — nothing will be sent.
+               Not you? ${emailLink(unsubscribeUrl, "Remove this address")}.`,
+              { muted: true }
+            ),
+          {
+            eyebrow: "Subscription",
+            preheader: `One click to get incident updates from ${page.name}.`,
+            footerNote: `Sent because this address was entered on the ${escapeHtml(page.name)} status page.`,
+          }
         ),
       });
     } catch (error) {
@@ -109,12 +117,4 @@ export async function unsubscribeHandler(req: Request, res: Response) {
   }
 
   res.json({ message: "Unsubscribed" });
-}
-
-function escapeHtml(value: string): string {
-  return value
-    .replace(/&/g, "&amp;")
-    .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;")
-    .replace(/"/g, "&quot;");
 }
