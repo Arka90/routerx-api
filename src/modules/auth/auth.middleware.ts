@@ -1,6 +1,6 @@
 import { Request, Response, NextFunction } from "express";
 import jwt from "jsonwebtoken";
-import "dotenv/config";
+import { config } from "../../core/config";
 
 export interface AuthRequest extends Request {
   user?: {
@@ -17,10 +17,9 @@ export function requireAuth(req: AuthRequest, res: Response, next: NextFunction)
   }
 
   const token = authHeader.split(" ")[1];
-  const jwtSecret = process.env.JWT_SECRET || "fallback_secret_dont_use_in_prod";
 
   try {
-    const decoded = jwt.verify(token, jwtSecret) as { id: number; email: string };
+    const decoded = jwt.verify(token, config.jwtSecret) as { id: number; email: string };
     
     // attach user to request
     req.user = {

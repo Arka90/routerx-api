@@ -1,7 +1,8 @@
-import { db } from "../../core/db/client";
+import crypto from "crypto";
 import nodemailer from "nodemailer";
-import "dotenv/config";
 import jwt from "jsonwebtoken";
+import { db } from "../../core/db/client";
+import { config } from "../../core/config";
 
 const transporter = nodemailer.createTransport({
   host: process.env.SMTP_HOST,
@@ -13,82 +14,176 @@ const transporter = nodemailer.createTransport({
   },
 });
 
-function generateOTP() {
-  return Math.floor(1000 + Math.random() * 9000).toString();
-
+interface UserRow {
+  id: number;
+  email: string;
 }
 
-export async function requestOtp(email: string) {
-  // 1. find or create user
-  let user = db
-    .prepare("SELECT * FROM users WHERE email = ?")
-    .get(email) as any;
+interface OtpRow {
+  id: number;
+  user_id: number;
+  code_hash: string;
+  expires_at: string;
+  attempts: number;
+}
 
-  if (!user) {
-    const result = db
-      .prepare("INSERT INTO users (email) VALUES (?)")
-      .run(email);
+/**
+ * `Math.random()` is neither uniform nor unpredictable. That is tolerable for
+ * a jitter value and not tolerable for something that IS the credential, so
+ * this uses the CSPRNG. Six digits rather than four widens the space from
+ * 9,000 to 1,000,000 — the attempt cap below is what actually stops a brute
+ * force, but there is no reason to hand out the easier target.
+ */
+function generateOtp(): string {
+  const ceiling = 10 ** config.otp.length;
+  return crypto.randomInt(0, ceiling).toString().padStart(config.otp.length, "0");
+}
 
-    user = { id: result.lastInsertRowid, email };
-  }
+/**
+ * Keyed hash, not a bare digest: a six-digit code has ~20 bits of entropy, so
+ * an unkeyed SHA-256 of a leaked table falls to an exhaustive search in
+ * milliseconds. Binding the user id in stops one user's hash being replayed
+ * against another's row.
+ */
+function hashOtp(userId: number, code: string): string {
+  return crypto
+    .createHmac("sha256", config.jwtSecret)
+    .update(`${userId}:${code}`)
+    .digest("hex");
+}
 
-  // Delete previous OTP sessions for this user to avoid clutter
-  db.prepare("DELETE FROM sessions WHERE user_id = ? AND token LIKE 'OTP-%'").run(user.id);
+function constantTimeEquals(a: string, b: string): boolean {
+  const bufferA = Buffer.from(a, "utf8");
+  const bufferB = Buffer.from(b, "utf8");
 
-  // 2. create OTP token
-  const otp = generateOTP();
-  const token = `OTP-${user.id}-${otp}`;
-  // 15 minutes expiry
-  const expires = new Date(Date.now() + 15 * 60 * 1000).toISOString();
+  if (bufferA.length !== bufferB.length) return false;
 
-  db.prepare(`
-    INSERT INTO sessions (user_id, token, expires_at)
-    VALUES (?, ?, ?)
-  `).run(user.id, token, expires);
+  return crypto.timingSafeEqual(bufferA, bufferB);
+}
 
-  // 3. send OTP via email
+function normalizeEmail(email: string): string {
+  return email.trim().toLowerCase();
+}
+
+/**
+ * Looked up case-insensitively so an account created as `Foo@example.com`
+ * before emails were normalized is still reachable.
+ */
+function findUser(email: string): UserRow | undefined {
+  return db
+    .prepare(`SELECT id, email FROM users WHERE email = ? COLLATE NOCASE`)
+    .get(normalizeEmail(email)) as UserRow | undefined;
+}
+
+async function sendOtpEmail(email: string, code: string) {
   await transporter.sendMail({
     from: `"RouteRX" <${process.env.GENERAL_FROM}>`,
     to: email,
-    subject: "Your RouteRX Login OTP",
+    subject: "Your RouteRX login code",
     html: `
       <h2>Login to RouteRX</h2>
-      <p>Your OTP is: <strong>${otp}</strong></p>
-      <p>This OTP expires in 15 minutes.</p>
-      <p><small>If you didn't request this, ignore this email.</small></p>
+      <p>Your login code is: <strong style="font-size:20px;letter-spacing:3px">${code}</strong></p>
+      <p>It expires in ${config.otp.ttlMinutes} minutes and can be used once.</p>
+      <p><small>If you didn't request this, you can ignore this email — no one can sign in without the code.</small></p>
     `,
   });
-
-  console.log(`📧 OTP sent to ${email}: ${otp}`);
-
-  return { ok: true };
 }
 
-export function verifyOtp(email: string, otp: string) {
-  // Find user by email to construct token string
-  const user = db.prepare("SELECT * FROM users WHERE email = ?").get(email) as any;
+/**
+ * Issue a login code. Creating the user on first request is the signup flow,
+ * so this is deliberately callable for an unknown address — the abuse risk it
+ * carries (mailing arbitrary inboxes) is handled by the rate limits on the
+ * route, not here.
+ */
+export async function requestOtp(email: string): Promise<void> {
+  const normalized = normalizeEmail(email);
+
+  let user = findUser(normalized);
+
+  if (!user) {
+    const result = db
+      .prepare(`INSERT INTO users (email) VALUES (?)`)
+      .run(normalized);
+
+    user = { id: Number(result.lastInsertRowid), email: normalized };
+  }
+
+  // One live code per user: requesting a new one invalidates the previous,
+  // so an attacker cannot accumulate a pool of valid codes to guess against.
+  db.prepare(`DELETE FROM otp_codes WHERE user_id = ?`).run(user.id);
+
+  const code = generateOtp();
+  const expiresAt = new Date(
+    Date.now() + config.otp.ttlMinutes * 60 * 1000
+  ).toISOString();
+
+  db.prepare(
+    `INSERT INTO otp_codes (user_id, code_hash, expires_at) VALUES (?, ?, ?)`
+  ).run(user.id, hashOtp(user.id, code), expiresAt);
+
+  await sendOtpEmail(normalized, code);
+
+  // Never in production: the logs would be a list of live credentials.
+  if (!config.isProduction) {
+    console.log(`📧 OTP for ${normalized}: ${code}`);
+  }
+}
+
+/**
+ * Verify a code and, on success, issue the session JWT.
+ *
+ * Returns null for every failure mode — unknown user, no code, expired code,
+ * wrong code, too many attempts — so the caller cannot use the response to
+ * learn which addresses are registered.
+ */
+export function verifyOtp(email: string, code: string): { token: string } | null {
+  const user = findUser(email);
   if (!user) return null;
 
-  const tokenStr = `OTP-${user.id}-${otp}`;
+  const row = db
+    .prepare(
+      `SELECT * FROM otp_codes WHERE user_id = ? ORDER BY id DESC LIMIT 1`
+    )
+    .get(user.id) as OtpRow | undefined;
 
-  const session = db
-    .prepare("SELECT * FROM sessions WHERE token = ?")
-    .get(tokenStr) as any;
+  if (!row) return null;
 
-  if (!session) return null;
-
-  if (new Date(session.expires_at) < new Date()) {
-    // Optional: cleanup expired Token
-    db.prepare("DELETE FROM sessions WHERE token = ?").run(tokenStr);
+  if (new Date(row.expires_at) < new Date()) {
+    db.prepare(`DELETE FROM otp_codes WHERE id = ?`).run(row.id);
     return null;
   }
 
-  // OTP verified, issue JWT token valid for 7 days
-  const jwtSecret = process.env.JWT_SECRET || "fallback_secret_dont_use_in_prod";
-  const jwtToken = jwt.sign({ id: user.id, email: user.email }, jwtSecret, { expiresIn: "7d" });
+  if (row.attempts >= config.otp.maxAttempts) {
+    db.prepare(`DELETE FROM otp_codes WHERE id = ?`).run(row.id);
+    return null;
+  }
 
-  // Delete the OTP session as it's been used successfully
-  db.prepare("DELETE FROM sessions WHERE token = ?").run(tokenStr);
+  // Count the attempt before comparing. If the comparison throws or the
+  // process dies mid-request, the attempt still cost the caller something.
+  db.prepare(`UPDATE otp_codes SET attempts = attempts + 1 WHERE id = ?`).run(row.id);
 
-  return { token: jwtToken };
+  const matches = constantTimeEquals(
+    row.code_hash,
+    hashOtp(user.id, code.trim())
+  );
+
+  if (!matches) {
+    // Burn the code once the cap is reached, rather than leaving it alive for
+    // the rest of its TTL as a target for a fresh round of guesses.
+    if (row.attempts + 1 >= config.otp.maxAttempts) {
+      db.prepare(`DELETE FROM otp_codes WHERE id = ?`).run(row.id);
+    }
+    return null;
+  }
+
+  // Single use.
+  db.prepare(`DELETE FROM otp_codes WHERE id = ?`).run(row.id);
+
+  const token = jwt.sign(
+    { id: user.id, email: user.email },
+    config.jwtSecret,
+    { expiresIn: "7d" }
+  );
+
+  return { token };
 }

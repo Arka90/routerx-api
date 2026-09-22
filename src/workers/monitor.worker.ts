@@ -48,8 +48,8 @@ const worker = new Worker(
     // -----------------------------
     // 2️⃣ Run probe
     // -----------------------------
-    const { diagnosis, dns, tcp, tls, http } = await runFullProbe(url);
-    const rootCause = classifyFailure({ dns, tcp, tls, http });
+    const { diagnosis, dns, tcp, tls, http, blocked } = await runFullProbe(url);
+    const rootCause = classifyFailure({ dns, tcp, tls, http, blocked });
     const currentStatus: "UP" | "DOWN" | "SLOW" = diagnosis.status;
 
     // Check maintenance window
@@ -135,7 +135,10 @@ const worker = new Worker(
     // -----------------------------
     try {
       const hostname = new URL(url).hostname;
-      const expiryDate = await getCertificateExpiry(hostname);
+
+      // A blocked target resolves inside a private network, so fetching its
+      // certificate would make exactly the connection the probe refused.
+      const expiryDate = blocked ? null : await getCertificateExpiry(hostname);
 
       if (expiryDate) {
         tlsExpiryAt = expiryDate.toISOString();

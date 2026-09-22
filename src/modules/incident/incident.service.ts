@@ -96,6 +96,16 @@ export function getIncidentsByMonitor(monitorId: number): Incident[] {
 }
 
 /**
+ * SQLite's CURRENT_TIMESTAMP writes "YYYY-MM-DD HH:MM:SS" in UTC with no zone
+ * marker, which `new Date()` reads as local time. On anything but a UTC host
+ * that shifts the value by the offset, so normalize before parsing.
+ */
+function parseSqliteDate(value: string): Date {
+  if (/[Zz]|[+-]\d{2}:?\d{2}$/.test(value)) return new Date(value);
+  return new Date(`${value.replace(" ", "T")}Z`);
+}
+
+/**
  * Calculate uptime percentage over a rolling time window.
  *
  * Formula:  uptime% = (1 − totalDowntime / windowSeconds) × 100
@@ -105,10 +115,38 @@ export function getIncidentsByMonitor(monitorId: number): Incident[] {
 export function calculateUptime(
   monitorId: number,
   windowHours: number = 24
-): { uptime_percentage: number; total_downtime_seconds: number; window_hours: number } {
+): {
+  uptime_percentage: number;
+  total_downtime_seconds: number;
+  window_hours: number;
+  observed_hours: number;
+} {
   const now = new Date();
-  const windowStart = new Date(now.getTime() - windowHours * 3600 * 1000);
-  const windowSeconds = windowHours * 3600;
+  const requestedStart = new Date(now.getTime() - windowHours * 3600 * 1000);
+
+  /**
+   * A monitor cannot have been up or down before it existed. Dividing by the
+   * full window regardless meant a monitor created an hour ago that spent 30
+   * of those minutes down reported 99.93% over a 30-day window instead of
+   * ~50% — the headline number on the dashboard was meaningless for anything
+   * younger than the window.
+   */
+  const monitor = db
+    .prepare(`SELECT created_at FROM monitors WHERE id = ?`)
+    .get(monitorId) as { created_at: string } | undefined;
+
+  const createdAt = monitor?.created_at
+    ? parseSqliteDate(monitor.created_at)
+    : requestedStart;
+
+  const windowStart =
+    createdAt > requestedStart && createdAt <= now ? createdAt : requestedStart;
+
+  // Guard against a zero window for a monitor created moments ago.
+  const windowSeconds = Math.max(
+    1,
+    (now.getTime() - windowStart.getTime()) / 1000
+  );
 
   // Fetch incidents that overlap the window:
   //   started_at < now  AND  (resolved_at > windowStart  OR  resolved_at IS NULL)
@@ -149,6 +187,9 @@ export function calculateUptime(
   return {
     uptime_percentage: uptimePercentage,
     total_downtime_seconds: Math.round(totalDowntime),
+    // What was asked for, and what the percentage above could actually be
+    // measured over. They differ for monitors younger than the window.
     window_hours: windowHours,
+    observed_hours: Number((windowSeconds / 3600).toFixed(2)),
   };
 }

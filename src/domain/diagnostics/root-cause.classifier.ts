@@ -7,6 +7,7 @@ export type RootCause =
   | "HTTP_4XX"
   | "TIMEOUT"
   | "SLOW_RESPONSE"
+  | "BLOCKED_TARGET"
   | "UNKNOWN";
 
 export function classifyFailure({
@@ -14,7 +15,13 @@ export function classifyFailure({
   tcp,
   tls,
   http,
+  blocked,
 }: any): RootCause {
+
+  // Refused before any connection was attempted -- the target resolves inside
+  // a private network. Reported distinctly so an operator can tell a blocked
+  // target apart from a genuinely unreachable one.
+  if (blocked) return "BLOCKED_TARGET";
 
   // DNS
   if (!dns?.success) return "DNS_FAILURE";
