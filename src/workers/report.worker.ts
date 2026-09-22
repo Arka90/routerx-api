@@ -7,7 +7,7 @@ const worker = new Worker(
   "weekly-report",
   async (job: Job) => {
     if (job.name === "retention") {
-      const summary = pruneExpiredData();
+      const summary = await pruneExpiredData();
       console.log(
         `🧹 Pruned ${summary.probeResults} probe result(s), ` +
           `${summary.otpCodes} expired login code(s), ` +

@@ -1,292 +1,284 @@
 import { Response } from "express";
-import { AuthRequest } from "../auth/auth.middleware";
-import { createMonitor, getUserMonitors, updateMonitor, deleteMonitor, getMonitor, getProbeResultsForMonitor } from "./monitor.service";
-import { sendMonitorNotification } from "../notifications/email.provider";
 import { z } from "zod";
+import { AuthRequest } from "../auth/auth.middleware";
+import {
+  createMonitor,
+  deleteMonitor,
+  getMonitor,
+  getMonitorChannelIds,
+  getPolicy,
+  getProbeResults,
+  listMonitors,
+  MonitorExistsError,
+  MonitorNotFoundError,
+  updateMonitor,
+  updatePolicy,
+} from "./monitor.service";
+import {
+  alertPolicySchema,
+  createMonitorSchema,
+  maintenanceSchema,
+  updateMonitorSchema,
+} from "./monitor.schema";
+import { BlockedTargetError, resolveProbeTarget } from "../../core/security/ssrf";
+import { removeMonitorJob, scheduleMonitor } from "../../core/queue/schedulers/monitor.scheduler";
+import { sendMonitorNotification } from "../notifications/transactional";
+import { execute, query, queryOne } from "../../core/db/client";
 import { resolveIncident } from "../incident/incident.service";
 
-import { db } from "../../core/db/client";
-import { removeMonitorJob, scheduleMonitor } from "../../core/queue/schedulers/monitor.scheduler";
-import { isInMaintenance } from "../../domain/maintenance/maintenance.checker";
-import { BlockedTargetError, resolveProbeTarget } from "../../core/security/ssrf";
+/** Loads the monitor and 404s if it isn't in the caller's organization. */
+async function requireMonitor(req: AuthRequest, res: Response) {
+  const monitorId = Number(req.params.id);
 
-const monitorSchema = z.object({
-  url: z.string().url(),
-  interval_seconds: z.number().min(30).max(3600).optional().default(60),
-});
+  if (!Number.isInteger(monitorId) || monitorId <= 0) {
+    res.status(400).json({ error: "Invalid monitor id" });
+    return null;
+  }
+
+  const monitor = await getMonitor(req.orgId!, monitorId);
+
+  if (!monitor) {
+    res.status(404).json({ error: "Monitor not found" });
+    return null;
+  }
+
+  return monitor;
+}
 
 export async function addMonitor(req: AuthRequest, res: Response) {
-  try {
-    const { url, interval_seconds } = monitorSchema.parse(req.body);
+  const parsed = createMonitorSchema.safeParse(req.body);
 
-    // zod validates the shape of the URL, not where it points. Without this,
-    // a monitor on http://127.0.0.1:6379 or the cloud metadata endpoint turns
-    // the scheduled worker into a recurring SSRF.
-    await resolveProbeTarget(url);
-
-    const monitor = createMonitor(req.user!.id, url, interval_seconds);
-
-    // 🔥 schedule first check
-    await scheduleMonitor(monitor.id, monitor.url, monitor.interval_seconds);
-
-    // fire-and-forget email notification
-    sendMonitorNotification(req.user!.email, url, "CREATED");
-    console.log("Monitor created");
-
-    res.status(201).json({
-      message: "Monitor created",
-      monitor,
-    });
-  } catch (error: any) {
-    if (error instanceof z.ZodError) {
-      res.status(400).json({ error: error.format() });
-      return;
-    }
-    if (error instanceof BlockedTargetError) {
-      res.status(400).json({ error: error.message });
-      return;
-    }
-    if (error.message === "Monitor already exists") {
-      res.status(409).json({ error: "You are already monitoring this URL" });
-      return;
-    }
-    console.log(error);
-    
-    res.status(500).json({ error: "Failed to create monitor" });
-  }
-}
-
-
-export function listMonitors(req: AuthRequest, res: Response) {
-  const monitors = getUserMonitors(req.user!.id);
-  res.json(monitors);
-}
-
-export function getMonitorHandler(req: AuthRequest, res: Response) {
-  const { id } = req.params;
-  const monitor = getMonitor(req.user!.id, Number(id));
-  
-  if (!monitor) {
-    return res.status(404).json({ error: "Monitor not found" });
+  if (!parsed.success) {
+    return res.status(400).json({ error: parsed.error.issues[0]?.message ?? "Invalid monitor" });
   }
 
-  res.json(monitor);
-}
-
-export function getMonitorProbes(req: AuthRequest, res: Response) {
-  const { id } = req.params;
-  const monitorId = parseInt(id as string);
-  const limit = req.query.limit ? parseInt(req.query.limit as string) : 100;
-
   try {
-    const results = getProbeResultsForMonitor(req.user!.id, monitorId, limit);
-    res.json(results);
-  } catch (error: any) {
-    if (error.message === "Monitor not found or unauthorized") {
-      return res.status(404).json({ error: "Monitor not found" });
-    }
-    console.error(error);
-    res.status(500).json({ error: "Failed to fetch probe results" });
-  }
-}
+    // Shape is not destination: this is what stops a monitor pointed at the
+    // instance metadata endpoint from ever being created.
+    await resolveProbeTarget(parsed.data.url);
 
-export async function updateMonitorHandler(req: AuthRequest, res: Response) {
-  const { id } = req.params;
-  const monitorId = parseInt(id as string);
+    const monitor = await createMonitor(req.orgId!, req.user!.id, parsed.data);
 
-  const { url, interval_seconds } = req.body;
-
-  try {
-    if (url !== undefined) {
-      if (!z.string().url().safeParse(url).success) {
-        return res.status(400).json({ error: "Invalid URL" });
-      }
-      await resolveProbeTarget(url);
+    if (!monitor.paused) {
+      await scheduleMonitor(monitor.id, monitor.interval_seconds);
     }
 
-    if (
-      interval_seconds !== undefined &&
-      !z.number().int().min(30).max(3600).safeParse(interval_seconds).success
-    ) {
-      return res
-        .status(400)
-        .json({ error: "interval_seconds must be a whole number between 30 and 3600" });
-    }
+    sendMonitorNotification(req.user!.email, monitor.url, "CREATED");
 
-    const updatedMonitor = updateMonitor(
-      req.user!.id,
-      monitorId,
-      { url, interval_seconds }
-    );
-
-    // 🔥 remove old scheduled job
-    await removeMonitorJob(monitorId);
-
-    // 🔥 reschedule with new config
-    await scheduleMonitor(
-      updatedMonitor.id,
-      updatedMonitor.url,
-      updatedMonitor.interval_seconds
-    );
-
-    res.json(updatedMonitor);
-  } catch (error: any) {
+    res.status(201).json({ message: "Monitor created", monitor });
+  } catch (error) {
     if (error instanceof BlockedTargetError) {
       return res.status(400).json({ error: error.message });
     }
-    if (error.message === "Monitor not found or unauthorized" || error.message === "Monitor not found") {
-      return res.status(404).json({ error: "Monitor not found" });
+    if (error instanceof MonitorExistsError) {
+      return res.status(409).json({ error: error.message });
     }
-    res.status(500).json({ error: "Failed to update monitor" });
+    throw error;
   }
 }
 
+export async function listMonitorsHandler(req: AuthRequest, res: Response) {
+  res.json(await listMonitors(req.orgId!));
+}
 
-export async function deleteMonitorHandler(req: AuthRequest, res: Response) {
-  const { id } = req.params;
-  const monitorId = parseInt(id as string);
+export async function getMonitorHandler(req: AuthRequest, res: Response) {
+  const monitor = await requireMonitor(req, res);
+  if (!monitor) return;
+
+  res.json({
+    ...monitor,
+    policy: await getPolicy(monitor.id),
+    channel_ids: await getMonitorChannelIds(monitor.id),
+  });
+}
+
+export async function updateMonitorHandler(req: AuthRequest, res: Response) {
+  const existing = await requireMonitor(req, res);
+  if (!existing) return;
+
+  const parsed = updateMonitorSchema.safeParse(req.body);
+
+  if (!parsed.success) {
+    return res.status(400).json({ error: parsed.error.issues[0]?.message ?? "Invalid monitor" });
+  }
 
   try {
-    const monitor = getMonitor(req.user!.id, monitorId);
-
-    deleteMonitor(req.user!.id, monitorId);
-
-    // 🔥 stop future probes
-    await removeMonitorJob(monitorId);
-
-    if (monitor) {
-      sendMonitorNotification(req.user!.email, monitor.url, "DELETED");
-      console.log("Monitor deleted");
+    if (parsed.data.url && parsed.data.url !== existing.url) {
+      await resolveProbeTarget(parsed.data.url);
     }
 
-    res.json({ message: "Monitor deleted" });
-  } catch (error: any) {
-    if (error.message === "Monitor not found or unauthorized") {
+    const monitor = await updateMonitor(req.orgId!, existing.id, parsed.data);
+
+    // Interval and paused state both change what should be queued, and the
+    // old schedule has to go either way.
+    await removeMonitorJob(monitor.id);
+
+    if (!monitor.paused) {
+      await scheduleMonitor(monitor.id, monitor.interval_seconds);
+    }
+
+    res.json({ message: "Monitor updated", monitor });
+  } catch (error) {
+    if (error instanceof BlockedTargetError) {
+      return res.status(400).json({ error: error.message });
+    }
+    if (error instanceof MonitorNotFoundError) {
       return res.status(404).json({ error: "Monitor not found" });
     }
-    res.status(500).json({ error: "Failed to delete monitor" });
+    throw error;
   }
 }
 
+export async function deleteMonitorHandler(req: AuthRequest, res: Response) {
+  const monitor = await requireMonitor(req, res);
+  if (!monitor) return;
 
-const maintenanceSchema = z
-  .object({
-    starts_at: z.string().datetime({ offset: true }),
-    ends_at: z.string().datetime({ offset: true }),
-    reason: z.string().trim().max(500).optional(),
-  })
-  .refine((data) => new Date(data.ends_at) > new Date(data.starts_at), {
-    message: "ends_at must be after starts_at",
-    path: ["ends_at"],
+  await deleteMonitor(req.orgId!, monitor.id);
+  await removeMonitorJob(monitor.id);
+
+  sendMonitorNotification(req.user!.email, monitor.url, "DELETED");
+
+  res.json({ message: "Monitor deleted" });
+}
+
+export async function getMonitorProbes(req: AuthRequest, res: Response) {
+  const monitor = await requireMonitor(req, res);
+  if (!monitor) return;
+
+  const limit = Math.min(1000, Math.max(1, Number(req.query.limit) || 100));
+
+  res.json(await getProbeResults(monitor.id, limit));
+}
+
+// ---------------------------------------------------------------
+// Alert policy
+// ---------------------------------------------------------------
+
+export async function getPolicyHandler(req: AuthRequest, res: Response) {
+  const monitor = await requireMonitor(req, res);
+  if (!monitor) return;
+
+  res.json({
+    policy: await getPolicy(monitor.id),
+    channel_ids: await getMonitorChannelIds(monitor.id),
   });
+}
 
-export function scheduleMaintenance(req: AuthRequest, res: Response) {
-  const { id } = req.params;
-  const monitorId = parseInt(id as string);
+export async function updatePolicyHandler(req: AuthRequest, res: Response) {
+  const monitor = await requireMonitor(req, res);
+  if (!monitor) return;
 
-  // This went straight from the body into the INSERT before, so any string at
-  // all could be stored as a window and isInMaintenance() would compare
-  // garbage against an ISO timestamp.
+  const parsed = alertPolicySchema.safeParse(req.body);
+
+  if (!parsed.success) {
+    return res.status(400).json({ error: parsed.error.issues[0]?.message ?? "Invalid policy" });
+  }
+
+  const policy = await updatePolicy(monitor.id, parsed.data);
+
+  res.json({
+    message: "Alert policy updated",
+    policy,
+    channel_ids: await getMonitorChannelIds(monitor.id),
+  });
+}
+
+// ---------------------------------------------------------------
+// Maintenance
+// ---------------------------------------------------------------
+
+export async function scheduleMaintenance(req: AuthRequest, res: Response) {
+  const monitor = await requireMonitor(req, res);
+  if (!monitor) return;
+
   const parsed = maintenanceSchema.safeParse(req.body);
 
   if (!parsed.success) {
-    return res.status(400).json({
-      error: parsed.error.issues[0]?.message ?? "Invalid maintenance window",
-    });
+    return res
+      .status(400)
+      .json({ error: parsed.error.issues[0]?.message ?? "Invalid maintenance window" });
   }
 
   const { starts_at, ends_at, reason } = parsed.data;
 
-  try {
-    // verify monitor belongs to user
-    const monitor = getMonitor(req.user!.id, monitorId);
-    if (!monitor) {
-      return res.status(404).json({ error: "Monitor not found" });
-    }
+  // One window per monitor, as before.
+  await execute(`DELETE FROM maintenance_windows WHERE monitor_id = $1`, [monitor.id]);
 
-    // delete any existing maintenance windows first to enforce 1-window rule
-    db.prepare(`DELETE FROM maintenance_windows WHERE monitor_id = ?`).run(monitorId);
+  await execute(
+    `INSERT INTO maintenance_windows (monitor_id, starts_at, ends_at, reason)
+     VALUES ($1, $2, $3, $4)`,
+    [monitor.id, starts_at, ends_at, reason ?? null]
+  );
 
-    // insert maintenance window
-    db.prepare(`
-      INSERT INTO maintenance_windows (monitor_id, starts_at, ends_at, reason)
-      VALUES (?, ?, ?, ?)
-    `).run(
-      monitorId,
-      // Normalized to UTC ISO: isInMaintenance() compares these as strings
-      // against new Date().toISOString(), so a different offset format would
-      // silently compare wrong.
-      new Date(starts_at).toISOString(),
-      new Date(ends_at).toISOString(),
-      reason ?? null
-    );
+  const active = await queryOne<{ active: boolean }>(
+    `SELECT EXISTS (
+       SELECT 1 FROM maintenance_windows
+        WHERE monitor_id = $1 AND starts_at <= now() AND ends_at >= now()
+     ) AS active`,
+    [monitor.id]
+  );
 
-    // update the maintenance flag based on whether it is CURRENTLY in maintenance
-    const inMaintenance = isInMaintenance(monitorId);
-    db.prepare(`UPDATE monitors SET in_maintenance = ? WHERE id = ?`).run(inMaintenance ? 1 : 0, monitorId);
+  await execute(`UPDATE monitors SET in_maintenance = $2 WHERE id = $1`, [
+    monitor.id,
+    active?.active ?? false,
+  ]);
 
-    res.json({ message: "Maintenance scheduled" });
-  } catch (error: any) {
-    console.error(error);
-    res.status(500).json({ error: "Failed to schedule maintenance" });
-  }
+  res.json({ message: "Maintenance scheduled" });
 }
 
-export function removeMaintenance(req: AuthRequest, res: Response) {
-  const { id } = req.params;
-  const monitorId = parseInt(id as string);
+export async function getMaintenance(req: AuthRequest, res: Response) {
+  const monitor = await requireMonitor(req, res);
+  if (!monitor) return;
 
-  try {
-    // verify monitor belongs to user
-    const monitor = getMonitor(req.user!.id, monitorId);
-    if (!monitor) {
-      return res.status(404).json({ error: "Monitor not found" });
-    }
+  const window = await queryOne(
+    `SELECT * FROM maintenance_windows WHERE monitor_id = $1 ORDER BY id DESC LIMIT 1`,
+    [monitor.id]
+  );
 
-    // remove all maintenance windows for this monitor
-    db.prepare(`DELETE FROM maintenance_windows WHERE monitor_id = ?`).run(monitorId);
-
-    // clear maintenance flag and reset confirmed_status if it was stuck in MAINTENANCE
-    db.prepare(`
-      UPDATE monitors 
-      SET in_maintenance = 0,
-          confirmed_status = CASE WHEN confirmed_status = 'MAINTENANCE' THEN 'UP' ELSE confirmed_status END
-      WHERE id = ?
-    `).run(monitorId);
-
-    // If there was an open incident before maintenance, resolve it now
-    resolveIncident(monitorId);
-
-    res.json({ message: "Maintenance removed" });
-  } catch (error: any) {
-    console.error(error);
-    res.status(500).json({ error: "Failed to remove maintenance" });
-  }
+  res.json({ maintenance: window ?? null });
 }
 
-export function getMaintenance(req: AuthRequest, res: Response) {
-  const { id } = req.params;
-  const monitorId = parseInt(id as string);
+export async function removeMaintenance(req: AuthRequest, res: Response) {
+  const monitor = await requireMonitor(req, res);
+  if (!monitor) return;
 
-  try {
-    const monitor = getMonitor(req.user!.id, monitorId);
-    if (!monitor) {
-      return res.status(404).json({ error: "Monitor not found" });
-    }
+  await execute(`DELETE FROM maintenance_windows WHERE monitor_id = $1`, [monitor.id]);
 
-    const window = db.prepare(`
-      SELECT * FROM maintenance_windows 
-      WHERE monitor_id = ?
-      ORDER BY id DESC LIMIT 1
-    `).get(monitorId);
+  await execute(
+    `UPDATE monitors
+        SET in_maintenance = false,
+            confirmed_status = CASE WHEN confirmed_status = 'MAINTENANCE'
+                                    THEN 'UNCONFIRMED' ELSE confirmed_status END
+      WHERE id = $1`,
+    [monitor.id]
+  );
 
-    if (!window) {
-      return res.json({ maintenance: null });
-    }
+  // An incident that was open before the window started is still open.
+  await resolveIncident(monitor.id);
 
-    res.json({ maintenance: window });
-  } catch (error: any) {
-    console.error(error);
-    res.status(500).json({ error: "Failed to fetch maintenance window" });
-  }
+  res.json({ message: "Maintenance removed" });
 }
+
+// ---------------------------------------------------------------
+// Delivery history
+// ---------------------------------------------------------------
+
+export async function listDeliveries(req: AuthRequest, res: Response) {
+  const monitor = await requireMonitor(req, res);
+  if (!monitor) return;
+
+  const deliveries = await query(
+    `SELECT d.id, d.channel_type, d.event, d.status, d.error, d.created_at,
+            c.name AS channel_name
+       FROM alert_deliveries d
+       LEFT JOIN notification_channels c ON c.id = d.channel_id
+      WHERE d.monitor_id = $1
+      ORDER BY d.created_at DESC
+      LIMIT 50`,
+    [monitor.id]
+  );
+
+  res.json({ deliveries });
+}
+
+export const monitorIdParam = z.object({ id: z.coerce.number().int().positive() });

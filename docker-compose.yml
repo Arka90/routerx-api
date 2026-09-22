@@ -1,6 +1,20 @@
-version: "3.9"
-
 services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: routerx-postgres
+    restart: always
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-routerx}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD must be set}
+      POSTGRES_DB: ${POSTGRES_DB:-routerx}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    # Not published to the host: only the services on this network need it.
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-routerx} -d ${POSTGRES_DB:-routerx}"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
 
   redis:
     image: redis:7-alpine
@@ -8,58 +22,61 @@ services:
     restart: always
     volumes:
       - redis_data:/data
-
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
 
   api:
     build: .
     container_name: routerx-api
     restart: always
-    env_file:
-      - .env
+    env_file: [.env]
     environment:
       REDIS_HOST: redis
       PORT: 3000
-      DOCKER: "true"
     ports:
       - "3000:3000"
-    volumes:
-      - routerx_data:/app/data
+    # The api applies migrations at boot, so it must not start against a
+    # database that is still initialising.
     depends_on:
-      - redis
-
+      postgres: { condition: service_healthy }
+      redis: { condition: service_healthy }
+    healthcheck:
+      test: ["CMD", "node", "-e", "require('http').get('http://127.0.0.1:3000/health/ready',r=>process.exit(r.statusCode===200?0:1)).on('error',()=>process.exit(1))"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
 
   worker:
     build: .
     container_name: routerx-worker
     restart: always
     command: node dist/workers/monitor.worker.js
-    env_file:
-      - .env
+    env_file: [.env]
     environment:
       REDIS_HOST: redis
-      DOCKER: "true"
-    volumes:
-      - routerx_data:/app/data
     depends_on:
-      - redis
+      postgres: { condition: service_healthy }
+      redis: { condition: service_healthy }
+      # Wait for the api so the schema exists before the first check runs.
+      api: { condition: service_started }
 
   report-worker:
     build: .
     container_name: routerx-report-worker
     restart: always
     command: node dist/workers/report.worker.js
-    env_file:
-      - .env
+    env_file: [.env]
     environment:
       REDIS_HOST: redis
-      DOCKER: "true"
-    volumes:
-      - routerx_data:/app/data
     depends_on:
-      - redis
-
+      postgres: { condition: service_healthy }
+      redis: { condition: service_healthy }
+      api: { condition: service_started }
 
 volumes:
-  routerx_data:
+  postgres_data:
   redis_data:
-

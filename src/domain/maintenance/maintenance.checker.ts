@@ -1,16 +1,13 @@
-import { db } from "../../core/db/client";
+import { queryOne } from "../../core/db/client";
 
-export function isInMaintenance(monitorId: number): boolean {
-  const now = new Date().toISOString();
+export async function isInMaintenance(monitorId: number): Promise<boolean> {
+  const row = await queryOne<{ active: boolean }>(
+    `SELECT EXISTS (
+       SELECT 1 FROM maintenance_windows
+        WHERE monitor_id = $1 AND starts_at <= now() AND ends_at >= now()
+     ) AS active`,
+    [monitorId]
+  );
 
-  const row = db.prepare(`
-    SELECT 1
-    FROM maintenance_windows
-    WHERE monitor_id = ?
-      AND starts_at <= ?
-      AND ends_at >= ?
-    LIMIT 1
-  `).get(monitorId, now, now);
-
-  return !!row;
+  return row?.active ?? false;
 }

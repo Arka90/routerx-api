@@ -1,8 +1,6 @@
 import dns from "dns/promises";
 import net from "net";
 import tls from "tls";
-import http from "http";
-import https from "https";
 import { performance } from "perf_hooks";
 
 /* ---------------- DNS ---------------- */
@@ -106,75 +104,9 @@ export function probeTLS(
   });
 }
 
-/* ---------------- HTTP / TTFB ---------------- */
-
-/**
- * @param pinnedIp Address the caller already resolved and validated. Passing
- * it stops Node from performing its own lookup, which would reopen the
- * DNS-rebinding window the SSRF guard exists to close. SNI and certificate
- * validation still use the hostname.
+/*
+ * The HTTP leg lives in domain/http-check.ts. It needs redirect following
+ * with a fresh SSRF check per hop, configurable method/headers/body, and
+ * response capture for assertions — none of which belong in a one-shot
+ * timing probe.
  */
-export function probeHTTP(url: string, pinnedIp?: string): Promise<{
-  success: boolean;
-  statusCode: number | null;
-  ttfb: number | null;
-}> {
-  return new Promise((resolve) => {
-    const parsed = new URL(url);
-    const lib = parsed.protocol === "https:" ? https : http;
-
-    const start = performance.now();
-
-    const req = lib.request(
-      {
-        hostname: parsed.hostname,
-        path: `${parsed.pathname || "/"}${parsed.search}`,
-        method: "GET",
-        port: parsed.port || (parsed.protocol === "https:" ? 443 : 80),
-        timeout: 10_000,
-        lookup: pinnedIp
-          ? (_hostname, options, callback) => {
-              const family = net.isIP(pinnedIp);
-              // Node's overloads differ on `all`; both shapes land here.
-              if (typeof options === "object" && options?.all) {
-                (callback as any)(null, [{ address: pinnedIp, family }]);
-              } else {
-                (callback as any)(null, pinnedIp, family);
-              }
-            }
-          : undefined,
-      },
-      (res) => {
-        const firstByte = performance.now();
-
-        resolve({
-          success: true,
-          statusCode: res.statusCode || null,
-          ttfb: Math.round(firstByte - start),
-        });
-
-        // we only care about first byte
-        res.destroy();
-      }
-    );
-
-    req.on("timeout", () => {
-      req.destroy();
-      resolve({
-        success: false,
-        statusCode: null,
-        ttfb: null,
-      });
-    });
-
-    req.on("error", () => {
-      resolve({
-        success: false,
-        statusCode: null,
-        ttfb: null,
-      });
-    });
-
-    req.end();
-  });
-}

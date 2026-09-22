@@ -1,5 +1,5 @@
 import { Request, Response } from "express";
-import { db } from "../../core/db/client";
+import { queryOne } from "../../core/db/client";
 import { connection } from "../../core/queue/redis";
 
 /**
@@ -7,26 +7,19 @@ import { connection } from "../../core/queue/redis";
  * dependency blip never gets the container restarted out from under us.
  */
 export function healthController(_req: Request, res: Response) {
-  res.json({
-    status: "ok",
-    service: "routerx-api",
-  });
+  res.json({ status: "ok", service: "routerx-api" });
 }
 
 /**
  * Readiness: the process can actually do its job. This is what a load
- * balancer or `docker compose` healthcheck should poll — the shallow endpoint
- * above returned 200 even with the database unreadable and Redis gone, so a
- * fully broken deploy looked healthy.
+ * balancer or healthcheck should poll — the shallow endpoint above returns
+ * 200 even with the database unreachable and Redis gone.
  */
 export async function readinessController(_req: Request, res: Response) {
-  const checks: Record<string, "ok" | "error"> = {
-    database: "error",
-    redis: "error",
-  };
+  const checks: Record<string, "ok" | "error"> = { database: "error", redis: "error" };
 
   try {
-    db.prepare("SELECT 1").get();
+    await queryOne("SELECT 1 AS ok");
     checks.database = "ok";
   } catch (error) {
     console.error("Readiness: database check failed:", error);
@@ -34,7 +27,7 @@ export async function readinessController(_req: Request, res: Response) {
 
   try {
     // Without a bound, a half-open connection leaves the probe hanging until
-    // the poller times out, which reads as a much worse outage than it is.
+    // the poller times out, which reads as a worse outage than it is.
     await Promise.race([
       connection.ping(),
       new Promise((_resolve, reject) =>

@@ -34,6 +34,19 @@ function requireSecret(): string {
   return secret;
 }
 
+function requireDatabaseUrl(): string {
+  const url = process.env.DATABASE_URL;
+
+  if (!url) {
+    throw new Error(
+      "DATABASE_URL is not set. Refusing to start: expected a Postgres " +
+        "connection string, e.g. postgres://user:pass@host:5432/routerx"
+    );
+  }
+
+  return url;
+}
+
 function list(value: string | undefined): string[] {
   return (value ?? "")
     .split(",")
@@ -49,6 +62,17 @@ export const config = {
 
   jwtSecret: isTest ? TEST_SECRET : requireSecret(),
 
+  database: {
+    url: isTest
+      ? process.env.TEST_DATABASE_URL ??
+        "postgres://routerx:routerx@localhost:55432/routerx_test"
+      : requireDatabaseUrl(),
+    // One pool per process. The api serves requests concurrently; the workers
+    // process one job at a time and need far less.
+    poolSize: Number(process.env.DATABASE_POOL_SIZE) || 10,
+    ssl: process.env.DATABASE_SSL === "true",
+  },
+
   /**
    * Behind nginx or Cloudflare this must be set (e.g. TRUST_PROXY=1), or
    * every request appears to come from the proxy's IP and the per-IP rate
@@ -59,6 +83,9 @@ export const config = {
   /** Empty means "any origin" — set CORS_ORIGINS in production. */
   corsOrigins: list(process.env.CORS_ORIGINS),
 
+  /** Public URL of the web app, used to build invite links. */
+  appUrl: (process.env.APP_URL ?? "http://localhost:5173").replace(/\/$/, ""),
+
   otp: {
     length: 6,
     ttlMinutes: Number(process.env.OTP_TTL_MINUTES) || 10,
@@ -67,6 +94,10 @@ export const config = {
 
   retention: {
     probeDays: Number(process.env.PROBE_RETENTION_DAYS) || 30,
+  },
+
+  invites: {
+    ttlHours: Number(process.env.INVITE_TTL_HOURS) || 72,
   },
 
   /**

@@ -1,10 +1,11 @@
-import { db } from "./client";
+import { execute } from "./client";
 import { config } from "../config";
 
 export interface PruneSummary {
   probeResults: number;
   otpCodes: number;
   sessions: number;
+  alertDeliveries: number;
 }
 
 /**
@@ -15,32 +16,35 @@ export interface PruneSummary {
  * removed them. Incidents are deliberately kept — they are small, and they
  * are the history customers care about.
  */
-export function pruneExpiredData(): PruneSummary {
+export async function pruneExpiredData(): Promise<PruneSummary> {
   const cutoff = new Date(
     Date.now() - config.retention.probeDays * 24 * 60 * 60 * 1000
-  ).toISOString();
+  );
 
-  const now = new Date().toISOString();
+  const probeResults = await execute(
+    `DELETE FROM probe_results WHERE created_at < $1`,
+    [cutoff]
+  );
 
-  const probeResults = db
-    .prepare(`DELETE FROM probe_results WHERE created_at < ?`)
-    .run(cutoff).changes;
+  const otpCodes = await execute(`DELETE FROM otp_codes WHERE expires_at < now()`);
 
-  const otpCodes = db
-    .prepare(`DELETE FROM otp_codes WHERE expires_at < ?`)
-    .run(now).changes;
+  // Revoked sessions are kept for a week as an audit trail, then dropped.
+  const sessions = await execute(
+    `DELETE FROM sessions
+      WHERE expires_at < now()
+         OR (revoked_at IS NOT NULL AND revoked_at < now() - interval '7 days')`
+  );
 
-  const sessions = db
-    .prepare(`DELETE FROM sessions WHERE expires_at < ?`)
-    .run(now).changes;
+  const alertDeliveries = await execute(
+    `DELETE FROM alert_deliveries WHERE created_at < $1`,
+    [cutoff]
+  );
 
-  // Large deletes leave the write-ahead log holding the freed pages; fold it
-  // back into the main database so the -wal file does not grow without bound.
-  try {
-    db.pragma("wal_checkpoint(TRUNCATE)");
-  } catch (error) {
-    console.warn("WAL checkpoint after prune failed:", error);
-  }
+  // Expired invitations are not useful to anyone.
+  await execute(
+    `DELETE FROM org_invites
+      WHERE accepted_at IS NULL AND expires_at < now() - interval '30 days'`
+  );
 
-  return { probeResults, otpCodes, sessions };
+  return { probeResults, otpCodes, sessions, alertDeliveries };
 }
