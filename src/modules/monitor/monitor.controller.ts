@@ -25,6 +25,16 @@ import { removeMonitorJob, scheduleMonitor } from "../../core/queue/schedulers/m
 import { sendMonitorNotification } from "../notifications/transactional";
 import { execute, query, queryOne } from "../../core/db/client";
 import { resolveIncident } from "../incident/incident.service";
+import {
+  assertIntervalAllowed,
+  assertRegionsAllowed,
+  assertWithinQuota,
+  QuotaExceededError,
+} from "../billing/quota";
+import {
+  listRegionStatesForMonitor,
+  resolveMonitorRegions,
+} from "../regions/region.service";
 
 /** Loads the monitor and 404s if it isn't in the caller's organization. */
 async function requireMonitor(req: AuthRequest, res: Response) {
@@ -53,20 +63,29 @@ export async function addMonitor(req: AuthRequest, res: Response) {
   }
 
   try {
+    await assertWithinQuota(req.orgId!, "monitors");
+    await assertIntervalAllowed(req.orgId!, parsed.data.interval_seconds);
+
     // Shape is not destination: this is what stops a monitor pointed at the
     // instance metadata endpoint from ever being created.
     await resolveProbeTarget(parsed.data.url);
 
+    const regions = await resolveMonitorRegions(parsed.data.regions);
+    await assertRegionsAllowed(req.orgId!, regions.length);
+
     const monitor = await createMonitor(req.orgId!, req.user!.id, parsed.data);
 
     if (!monitor.paused) {
-      await scheduleMonitor(monitor.id, monitor.interval_seconds);
+      await scheduleMonitor(monitor.id, monitor.interval_seconds, regions);
     }
 
     sendMonitorNotification(req.user!.email, monitor.url, "CREATED");
 
     res.status(201).json({ message: "Monitor created", monitor });
   } catch (error) {
+    if (error instanceof QuotaExceededError) {
+      return res.status(402).json({ error: error.message, upgrade_required: true });
+    }
     if (error instanceof BlockedTargetError) {
       return res.status(400).json({ error: error.message });
     }
@@ -89,6 +108,10 @@ export async function getMonitorHandler(req: AuthRequest, res: Response) {
     ...monitor,
     policy: await getPolicy(monitor.id),
     channel_ids: await getMonitorChannelIds(monitor.id),
+    // Where it is being checked from, and what each vantage point sees. A
+    // single-region failure never reaches confirmed_status, so this is the
+    // only place it is visible.
+    region_states: await listRegionStatesForMonitor(monitor.id),
   });
 }
 
@@ -107,18 +130,31 @@ export async function updateMonitorHandler(req: AuthRequest, res: Response) {
       await resolveProbeTarget(parsed.data.url);
     }
 
+    if (parsed.data.interval_seconds !== undefined) {
+      await assertIntervalAllowed(req.orgId!, parsed.data.interval_seconds);
+    }
+
+    const previousRegions = await resolveMonitorRegions(existing.regions ?? []);
+
     const monitor = await updateMonitor(req.orgId!, existing.id, parsed.data);
 
-    // Interval and paused state both change what should be queued, and the
-    // old schedule has to go either way.
-    await removeMonitorJob(monitor.id);
+    const regions = await resolveMonitorRegions(monitor.regions ?? []);
+    await assertRegionsAllowed(req.orgId!, regions.length);
+
+    // Interval, region set and paused state all change what should be
+    // queued. Remove using the *previous* regions, or a schedule in a region
+    // that was just dropped would keep firing.
+    await removeMonitorJob(monitor.id, previousRegions);
 
     if (!monitor.paused) {
-      await scheduleMonitor(monitor.id, monitor.interval_seconds);
+      await scheduleMonitor(monitor.id, monitor.interval_seconds, regions);
     }
 
     res.json({ message: "Monitor updated", monitor });
   } catch (error) {
+    if (error instanceof QuotaExceededError) {
+      return res.status(402).json({ error: error.message, upgrade_required: true });
+    }
     if (error instanceof BlockedTargetError) {
       return res.status(400).json({ error: error.message });
     }
@@ -133,8 +169,10 @@ export async function deleteMonitorHandler(req: AuthRequest, res: Response) {
   const monitor = await requireMonitor(req, res);
   if (!monitor) return;
 
+  const regions = await resolveMonitorRegions(monitor.regions ?? []);
+
   await deleteMonitor(req.orgId!, monitor.id);
-  await removeMonitorJob(monitor.id);
+  await removeMonitorJob(monitor.id, regions);
 
   sendMonitorNotification(req.user!.email, monitor.url, "DELETED");
 

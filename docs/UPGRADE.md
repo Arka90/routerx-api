@@ -81,3 +81,66 @@ invitations accepted after the upgrade will not exist in the old schema.
 The schema needs the `citext` extension, which every managed provider I know
 of allows. Set `DATABASE_SSL=true` for a provider that requires TLS, and drop
 the `postgres` service from `docker-compose.yml`.
+
+---
+
+# Upgrading to status pages, plans, and multi-region
+
+This release is additive. Nothing about how existing monitors are checked
+changes unless you opt in, and there is no data migration.
+
+## What is new
+
+| | |
+| --- | --- |
+| **Public status pages** | A page per workspace at `/status/<slug>`, with 90 days of per-component uptime, incident history and email subscribers. Unpublished by default. |
+| **Incident updates** | Post a narrative on an incident — investigating / identified / monitoring / resolved. Public updates appear on any status page carrying that monitor; internal ones do not. |
+| **Plans and quotas** | Monitor, member, channel, status page, region and check-interval limits per plan, plus per-plan probe retention. |
+| **Multi-region probing** | Checks from several vantage points, with a configurable number of regions that must agree before an incident opens. See [MULTI-REGION.md](MULTI-REGION.md). |
+
+## What you need to do
+
+**Nothing is required.** The defaults preserve current behaviour exactly:
+
+- Every existing workspace is **grandfathered** — unlimited, regardless of
+  plan — and `ENFORCE_QUOTAS` is `false`, so nothing is refused either way.
+  Usage and limits are reported from day one, so you can look at real numbers
+  before deciding.
+- Every monitor keeps `confirmations = 1`, which is single-vantage checking,
+  and there is one region (`default`) until you deploy a second worker.
+- Billing endpoints return `503` until `STRIPE_SECRET_KEY` is set. The rest of
+  the app does not care.
+
+## When you do want to turn things on
+
+**Quotas.** Look at `GET /billing` for a workspace first. Then set
+`ENFORCE_QUOTAS=true` and clear `grandfathered` on the subscriptions you
+actually want limited:
+
+```sql
+UPDATE subscriptions SET grandfathered = false WHERE org_id = 42;
+```
+
+Going over a limit returns `402` with a message naming the limit. Nothing is
+deleted or paused — existing monitors above the limit keep running; only
+creating more is refused.
+
+**Billing.** Set `STRIPE_SECRET_KEY`, `STRIPE_WEBHOOK_SECRET` and the two
+price ids, and point a Stripe webhook at `POST /billing/webhook` for
+`checkout.session.completed`, `customer.subscription.*`. The endpoint verifies
+the signature and rejects anything unsigned, stale, or replayed.
+
+This path has not been exercised against live Stripe — the signature
+verification and the idempotency are unit-tested, but the first real checkout
+is the first real test. Run one in Stripe's test mode before pointing anyone
+at a pricing page.
+
+**Multi-region.** See [MULTI-REGION.md](MULTI-REGION.md). Deploy a worker
+elsewhere with `REGION` set, restart the API so existing monitors fan out to
+it, then raise `confirmations` on the monitors you want double-checked.
+
+## Retention changes with plans
+
+Probe history is now pruned per plan (7 / 30 / 90 days) rather than by a
+single instance-wide setting. Grandfathered workspaces and any workspace with
+no subscription row keep using `PROBE_RETENTION_DAYS`.

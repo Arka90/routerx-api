@@ -15,7 +15,7 @@ export class MonitorNotFoundError extends Error {}
 const MONITOR_COLUMNS = `
   id, org_id, created_by, name, url, method, request_headers, request_body,
   expected_status_codes, assertion_type, assertion_value, timeout_ms,
-  follow_redirects, interval_seconds, paused, confirmed_status,
+  follow_redirects, interval_seconds, regions, paused, confirmed_status,
   consecutive_failures, consecutive_successes, tls_expiry_at,
   tls_alerted_days, in_maintenance, created_at, updated_at
 `;
@@ -39,9 +39,9 @@ export async function createMonitor(
       `INSERT INTO monitors (
          org_id, created_by, name, url, method, request_headers, request_body,
          expected_status_codes, assertion_type, assertion_value, timeout_ms,
-         follow_redirects, interval_seconds, paused
+         follow_redirects, interval_seconds, regions, paused
        )
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15)
        RETURNING ${MONITOR_COLUMNS}`,
       [
         orgId,
@@ -57,6 +57,7 @@ export async function createMonitor(
         input.timeout_ms ?? 10_000,
         input.follow_redirects ?? true,
         input.interval_seconds ?? 60,
+        input.regions ?? [],
         input.paused ?? false,
       ]
     );
@@ -127,6 +128,7 @@ const UPDATABLE: Array<keyof UpdateMonitorInput> = [
   "timeout_ms",
   "follow_redirects",
   "interval_seconds",
+  "regions",
   "paused",
 ];
 
@@ -248,6 +250,7 @@ export async function updatePolicy(
     ["slow_threshold_ms", "slow_threshold_ms"],
     ["renotify_minutes", "renotify_minutes"],
     ["muted_until", "muted_until"],
+    ["confirmations", "confirmations"],
   ];
 
   for (const [key, column] of fields) {
@@ -314,9 +317,9 @@ export async function getMonitorChannelIds(monitorId: number): Promise<number[]>
 
 /** Every active monitor, for re-registering schedules after a restart. */
 export async function listSchedulableMonitors(): Promise<
-  Array<{ id: number; url: string; interval_seconds: number }>
+  Array<{ id: number; url: string; interval_seconds: number; regions: string[] }>
 > {
   return query(
-    `SELECT id, url, interval_seconds FROM monitors WHERE paused = false`
+    `SELECT id, url, interval_seconds, regions FROM monitors WHERE paused = false`
   );
 }

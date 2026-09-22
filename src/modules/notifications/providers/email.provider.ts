@@ -1,5 +1,15 @@
 import { z } from "zod";
-import { ALERT_FROM, emailLayout, sendMail } from "../../../core/mail/mailer";
+import {
+  ALERT_FROM,
+  emailButton,
+  emailLayout,
+  emailParagraph,
+  emailPill,
+  emailTable,
+  escapeHtml,
+  sendMail,
+  type EmailTone,
+} from "../../../core/mail/mailer";
 import { query } from "../../../core/db/client";
 import {
   ChannelConfigError,
@@ -14,57 +24,108 @@ const configSchema = z.object({
   recipients: z.array(z.string().email()).max(20).default([]),
 });
 
-function colorFor(event: AlertEvent): string {
-  if (event.type === "UP") return "#059669";
-  if (event.type === "DEGRADED") return "#d97706";
-  return "#dc2626";
+function toneFor(event: AlertEvent): EmailTone {
+  switch (event.type) {
+    case "UP":
+      return "up";
+    case "DEGRADED":
+      return "degraded";
+    case "TEST":
+      return "brand";
+    case "TLS_EXPIRY":
+      return "degraded";
+    default:
+      return "down";
+  }
+}
+
+function eyebrowFor(event: AlertEvent): string {
+  switch (event.type) {
+    case "UP":
+      return "Recovered";
+    case "DEGRADED":
+      return "Degraded";
+    case "REMINDER":
+      return "Still down";
+    case "TLS_EXPIRY":
+      return "Certificate";
+    case "TEST":
+      return "Test alert";
+    default:
+      return "Incident";
+  }
+}
+
+function formatDuration(seconds: number): string {
+  const minutes = Math.floor(seconds / 60);
+  const rest = seconds % 60;
+  if (minutes >= 60) {
+    const hours = Math.floor(minutes / 60);
+    return `${hours}h ${minutes % 60}m`;
+  }
+  return minutes > 0 ? `${minutes}m ${rest}s` : `${rest}s`;
+}
+
+/** "HTTP_5XX" → "HTTP 5xx", "TLS_HANDSHAKE_FAILED" → "TLS handshake failed". */
+function humanizeRootCause(rootCause: string): string {
+  return rootCause
+    .toLowerCase()
+    .split("_")
+    .map((word, index) => {
+      if (["dns", "tcp", "tls", "http", "ssl"].includes(word)) return word.toUpperCase();
+      return index === 0 ? word.charAt(0).toUpperCase() + word.slice(1) : word;
+    })
+    .join(" ");
 }
 
 export function renderAlertHtml(event: AlertEvent): string {
-  const rows: Array<[string, string]> = [
-    ["Endpoint", event.monitor.url],
-    ["Status", event.headline],
+  const tone = toneFor(event);
+  const label = event.monitor.name ?? event.monitor.url;
+
+  const rows: Array<{ label: string; value: string; mono?: boolean }> = [
+    { label: "Status", value: emailPill(event.headline, tone) },
+    { label: "Endpoint", value: escapeHtml(event.monitor.url), mono: true },
   ];
 
-  if (event.rootCause) rows.push(["Root cause", event.rootCause.replace(/_/g, " ")]);
-  if (event.detail) rows.push(["Detail", event.detail]);
-  if (event.durationSeconds !== null) {
-    const minutes = Math.floor(event.durationSeconds / 60);
-    const seconds = event.durationSeconds % 60;
-    rows.push(["Downtime", minutes > 0 ? `${minutes}m ${seconds}s` : `${seconds}s`]);
+  if (event.rootCause) {
+    rows.push({ label: "Root cause", value: escapeHtml(humanizeRootCause(event.rootCause)) });
   }
-  rows.push(["Detected at", event.occurredAt.toISOString()]);
+  if (event.detail) rows.push({ label: "Detail", value: escapeHtml(event.detail), mono: true });
+  if (event.durationSeconds !== null) {
+    rows.push({ label: "Downtime", value: escapeHtml(formatDuration(event.durationSeconds)) });
+  }
+  rows.push({ label: "Detected", value: escapeHtml(event.occurredAt.toISOString()), mono: true });
+  rows.push({ label: "Workspace", value: escapeHtml(event.organizationName) });
 
-  const table = rows
-    .map(
-      ([label, value]) => `
-      <tr>
-        <td style="padding:6px 12px 6px 0;color:#666;font-size:13px;white-space:nowrap">${label}</td>
-        <td style="padding:6px 0;font-size:13px;font-family:ui-monospace,SFMono-Regular,monospace">${escapeHtml(value)}</td>
-      </tr>`
-    )
-    .join("");
+  const lead =
+    event.type === "UP"
+      ? `${escapeHtml(label)} is responding normally again.`
+      : event.type === "DEGRADED"
+        ? `${escapeHtml(label)} is answering, but slower than its threshold allows.`
+        : event.type === "REMINDER"
+          ? `${escapeHtml(label)} is still down and nobody has acknowledged the incident yet.`
+          : event.type === "TEST"
+            ? `This is a test from RouteRX. If you can read it, alerts for this workspace will reach this address.`
+            : `${escapeHtml(label)} failed enough consecutive checks to be confirmed down.`;
 
   return emailLayout(
-    `${event.monitor.name ?? event.monitor.url} is ${event.headline.toLowerCase()}`,
-    `
-      <div style="border-left:3px solid ${colorFor(event)};padding-left:14px;margin-bottom:20px">
-        <table style="border-collapse:collapse">${table}</table>
-      </div>
-      <a href="${event.dashboardUrl}"
-         style="display:inline-block;background:#111;color:#fff;text-decoration:none;padding:10px 18px;border-radius:6px;font-size:13px;font-weight:500">
-        Open monitor
-      </a>
-    `
+    `${escapeHtml(label)} is ${escapeHtml(event.headline.toLowerCase())}`,
+    emailParagraph(lead) +
+      emailTable(rows, { tone }) +
+      emailButton(event.dashboardUrl, "Open monitor") +
+      (event.type === "DOWN" || event.type === "REMINDER"
+        ? emailParagraph(
+            "Acknowledging the incident in RouteRX stops reminders for everyone on the team.",
+            { muted: true }
+          )
+        : ""),
+    {
+      eyebrow: eyebrowFor(event),
+      tone,
+      preheader: `${label} — ${event.headline}${event.rootCause ? ` · ${humanizeRootCause(event.rootCause)}` : ""}`,
+      footerNote: `Sent to the alert channel for ${escapeHtml(event.organizationName)}. Manage channels and per-monitor routing in RouteRX.`,
+    }
   );
-}
-
-function escapeHtml(value: string): string {
-  return value
-    .replace(/&/g, "&amp;")
-    .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;")
-    .replace(/"/g, "&quot;");
 }
 
 export const emailProvider: ChannelProvider = {

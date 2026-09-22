@@ -17,6 +17,7 @@ import {
   type OrgRole,
 } from "./org.service";
 import { sendInviteEmail } from "../notifications/transactional";
+import { assertWithinQuota, QuotaExceededError } from "../billing/quota";
 
 const roleSchema = z.enum(["owner", "admin", "member"]);
 
@@ -120,6 +121,18 @@ export async function createInviteHandler(req: AuthRequest, res: Response) {
 
   if (members.some((m) => m.email.toLowerCase() === parsed.data.email.toLowerCase())) {
     return res.status(409).json({ error: "That person is already a member" });
+  }
+
+  // Checked at invite time rather than at acceptance: telling someone their
+  // invitation is invalid after they click it is a worse experience than
+  // telling the admin the seat is not there.
+  try {
+    await assertWithinQuota(req.orgId!, "members");
+  } catch (error) {
+    if (error instanceof QuotaExceededError) {
+      return res.status(402).json({ error: error.message, upgrade_required: true });
+    }
+    throw error;
   }
 
   const invite = await createInvite(

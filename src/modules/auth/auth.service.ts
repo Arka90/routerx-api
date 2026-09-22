@@ -1,7 +1,7 @@
 import crypto from "crypto";
 import { execute, queryOne } from "../../core/db/client";
 import { config } from "../../core/config";
-import { emailLayout, sendMail } from "../../core/mail/mailer";
+import { emailCode, emailLayout, emailParagraph, sendMail } from "../../core/mail/mailer";
 import { createSession } from "./session.service";
 import {
   ensurePersonalOrganization,
@@ -71,15 +71,19 @@ async function sendOtpEmail(email: string, code: string): Promise<void> {
     subject: "Your RouteRX login code",
     html: emailLayout(
       "Sign in to RouteRX",
-      `
-        <p style="font-size:14px;color:#333">Your login code is:</p>
-        <p style="font-size:30px;font-weight:600;letter-spacing:8px;margin:18px 0">${code}</p>
-        <p style="font-size:13px;color:#666">
-          It expires in ${config.otp.ttlMinutes} minutes and can be used once.
-          If you didn't request it, you can ignore this email — nobody can
-          sign in without the code.
-        </p>
-      `
+      emailParagraph("Enter this code to finish signing in:") +
+        emailCode(code) +
+        emailParagraph(
+          `It expires in ${config.otp.ttlMinutes} minutes and can be used once.
+           If you didn't request it, you can ignore this email — nobody can
+           sign in without the code.`,
+          { muted: true }
+        ),
+      {
+        eyebrow: "Login code",
+        preheader: `Your RouteRX login code expires in ${config.otp.ttlMinutes} minutes.`,
+        footerNote: "Sent because this address was used to sign in to RouteRX.",
+      }
     ),
   });
 }

@@ -84,7 +84,11 @@ describe("API surface", () => {
       .send({ url: "https://example.com", interval_seconds: 60 });
 
     expect(create.status).toBe(201);
-    expect(scheduleMonitor).toHaveBeenCalledWith(create.body.monitor.id, 60);
+    // Third argument is the resolved region list; with one region seeded
+    // by the initial migration that is ['default'].
+    expect(scheduleMonitor).toHaveBeenCalledWith(create.body.monitor.id, 60, [
+      "default",
+    ]);
 
     const list = await request(app).get("/monitor").set(auth(owner.token));
 

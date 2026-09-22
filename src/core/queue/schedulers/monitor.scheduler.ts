@@ -1,45 +1,67 @@
 import { monitorQueue } from "../monitor.queue";
+import { resolveMonitorRegions } from "../../../modules/regions/region.service";
 
-function schedulerId(monitorId: number): string {
-  return `monitor:${monitorId}`;
+function schedulerId(monitorId: number, region: string): string {
+  return `monitor:${monitorId}:${region}`;
 }
 
 /**
- * The job carries only the monitor id. It used to carry the url and interval
- * too, which meant an edited monitor kept being checked against its old
- * configuration until the scheduler happened to be rebuilt — the worker now
- * reads current configuration from the database on every run.
+ * Register a repeating check per region.
+ *
+ * The job carries only the monitor id and region. It used to carry the url and
+ * interval too, which meant an edited monitor kept being checked against its
+ * old configuration until the scheduler happened to be rebuilt.
  */
 export async function scheduleMonitor(
   monitorId: number,
-  intervalSeconds: number
+  intervalSeconds: number,
+  regions?: string[]
 ): Promise<void> {
-  await monitorQueue.upsertJobScheduler(
-    schedulerId(monitorId),
-    { every: intervalSeconds * 1000 },
-    {
-      name: "check",
-      data: { monitorId },
-      opts: { removeOnComplete: true, removeOnFail: 100 },
-    }
-  );
+  const targets = regions ?? (await resolveMonitorRegions([]));
+
+  for (const region of targets) {
+    await monitorQueue(region).upsertJobScheduler(
+      schedulerId(monitorId, region),
+      { every: intervalSeconds * 1000 },
+      {
+        name: "check",
+        data: { monitorId, region },
+        opts: { removeOnComplete: true, removeOnFail: 100 },
+      }
+    );
+  }
 }
 
-export async function removeMonitorJob(monitorId: number): Promise<void> {
-  const id = schedulerId(monitorId);
+/**
+ * Remove a monitor's schedulers.
+ *
+ * `regions` is optional because a monitor that has just been deleted can no
+ * longer say which regions it ran in — passing every known region is how the
+ * caller makes sure nothing is left behind.
+ */
+export async function removeMonitorJob(
+  monitorId: number,
+  regions?: string[]
+): Promise<void> {
+  const targets = regions ?? (await resolveMonitorRegions([]));
 
-  await monitorQueue.removeJobScheduler(id);
+  for (const region of targets) {
+    const id = schedulerId(monitorId, region);
+    const queue = monitorQueue(region);
 
-  // Removing the scheduler stops new jobs being produced but leaves any
-  // already-materialised delayed instance behind, which would fire once more
-  // against a monitor that no longer exists.
-  const delayed = await monitorQueue.getDelayed();
+    await queue.removeJobScheduler(id);
 
-  for (const job of delayed) {
-    if (job.id?.includes(id)) {
-      await job.remove().catch((error) => {
-        console.error(`Could not purge orphaned job for monitor ${monitorId}:`, error);
-      });
+    // Removing the scheduler stops new jobs being produced but leaves any
+    // already-materialised delayed instance behind, which would fire once
+    // more against a monitor that no longer exists.
+    const delayed = await queue.getDelayed();
+
+    for (const job of delayed) {
+      if (job.id?.includes(id)) {
+        await job.remove().catch((error) => {
+          console.error(`Could not purge orphaned job for monitor ${monitorId}:`, error);
+        });
+      }
     }
   }
 }

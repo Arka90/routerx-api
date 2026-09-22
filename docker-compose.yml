@@ -50,6 +50,11 @@ services:
       retries: 3
       start_period: 20s
 
+  # A probe worker. Each one consumes only its own region's queue and
+  # announces that region on startup, so a second vantage point is a copy of
+  # this block with a different REGION — see docs/MULTI-REGION.md. Running
+  # them all on one host tells you nothing extra; they belong in different
+  # places.
   worker:
     build: .
     container_name: routerx-worker
@@ -58,6 +63,8 @@ services:
     env_file: [.env]
     environment:
       REDIS_HOST: redis
+      REGION: ${REGION:-default}
+      REGION_NAME: ${REGION_NAME:-Primary}
     depends_on:
       postgres: { condition: service_healthy }
       redis: { condition: service_healthy }

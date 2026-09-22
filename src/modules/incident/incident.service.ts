@@ -8,6 +8,7 @@ export interface Incident {
   duration_seconds: number | null;
   root_cause: string | null;
   failure_detail: string | null;
+  affected_regions: string[];
   acknowledged_at: Date | null;
   acknowledged_by: number | null;
   last_notified_at: Date | null;
@@ -26,14 +27,16 @@ export interface Incident {
 export async function openIncident(
   monitorId: number,
   rootCause: string | null,
-  detail: string | null
+  detail: string | null,
+  affectedRegions: string[] = []
 ): Promise<Incident | null> {
   const rows = await query<Incident>(
-    `INSERT INTO incidents (monitor_id, started_at, root_cause, failure_detail, last_notified_at)
-     VALUES ($1, now(), $2, $3, NULL)
+    `INSERT INTO incidents
+       (monitor_id, started_at, root_cause, failure_detail, affected_regions, last_notified_at)
+     VALUES ($1, now(), $2, $3, $4, NULL)
      ON CONFLICT (monitor_id) WHERE resolved_at IS NULL DO NOTHING
      RETURNING *`,
-    [monitorId, rootCause, detail]
+    [monitorId, rootCause, detail, affectedRegions]
   );
 
   return rows[0] ?? null;
@@ -190,4 +193,69 @@ export async function calculateUptime(
     window_hours: windowHours,
     observed_hours: Number((observed / 3600).toFixed(2)),
   };
+}
+
+// ---------------------------------------------------------------
+// Incident updates
+// ---------------------------------------------------------------
+
+export type IncidentUpdateStatus =
+  | "investigating"
+  | "identified"
+  | "monitoring"
+  | "resolved";
+
+export interface IncidentUpdate {
+  id: number;
+  incident_id: number;
+  author_id: number | null;
+  author_email: string | null;
+  status: IncidentUpdateStatus;
+  body: string;
+  is_public: boolean;
+  created_at: Date;
+}
+
+/** Incidents belong to monitors; monitors belong to a workspace. */
+export async function incidentBelongsToOrg(
+  orgId: number,
+  incidentId: number
+): Promise<boolean> {
+  const row = await queryOne<{ id: number }>(
+    `SELECT i.id
+       FROM incidents i
+       JOIN monitors m ON m.id = i.monitor_id
+      WHERE i.id = $1 AND m.org_id = $2`,
+    [incidentId, orgId]
+  );
+
+  return Boolean(row);
+}
+
+export async function listIncidentUpdates(
+  incidentId: number
+): Promise<IncidentUpdate[]> {
+  return query<IncidentUpdate>(
+    `SELECT u.*, au.email::text AS author_email
+       FROM incident_updates u
+       LEFT JOIN users au ON au.id = u.author_id
+      WHERE u.incident_id = $1
+      ORDER BY u.created_at ASC`,
+    [incidentId]
+  );
+}
+
+export async function addIncidentUpdate(
+  incidentId: number,
+  authorId: number,
+  input: { status: IncidentUpdateStatus; body: string; is_public: boolean }
+): Promise<IncidentUpdate> {
+  const row = await queryOne<IncidentUpdate>(
+    `INSERT INTO incident_updates (incident_id, author_id, status, body, is_public)
+     VALUES ($1, $2, $3, $4, $5)
+     RETURNING *`,
+    [incidentId, authorId, input.status, input.body.trim(), input.is_public]
+  );
+
+  return row!;
 }

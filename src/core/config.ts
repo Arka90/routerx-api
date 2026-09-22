@@ -83,6 +83,14 @@ export const config = {
   /** Empty means "any origin" — set CORS_ORIGINS in production. */
   corsOrigins: list(process.env.CORS_ORIGINS),
 
+  /**
+   * Which region this process probes from. Workers announce themselves under
+   * this code, so bringing up a probe in a new location is a deploy rather
+   * than a deploy plus a migration someone forgets.
+   */
+  region: process.env.REGION?.trim() || "default",
+  regionName: process.env.REGION_NAME?.trim() || undefined,
+
   /** Public URL of the web app, used to build invite links. */
   appUrl: (process.env.APP_URL ?? "http://localhost:5173").replace(/\/$/, ""),
 
@@ -98,6 +106,26 @@ export const config = {
 
   invites: {
     ttlHours: Number(process.env.INVITE_TTL_HOURS) || 72,
+  },
+
+  /**
+   * Off by default. Plan limits are reported from day one but not applied
+   * until this is set, so an existing deployment can look at real usage
+   * before anything starts being refused.
+   */
+  enforceQuotas: process.env.ENFORCE_QUOTAS === "true",
+
+  billing: {
+    /** Billing endpoints return 503 until a secret key is present. */
+    stripeSecretKey: process.env.STRIPE_SECRET_KEY ?? "",
+    stripeWebhookSecret: process.env.STRIPE_WEBHOOK_SECRET ?? "",
+    priceIds: {
+      pro: process.env.STRIPE_PRICE_PRO ?? "",
+      business: process.env.STRIPE_PRICE_BUSINESS ?? "",
+    },
+    get enabled(): boolean {
+      return Boolean(process.env.STRIPE_SECRET_KEY);
+    },
   },
 
   /**

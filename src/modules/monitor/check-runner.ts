@@ -16,8 +16,16 @@ import {
 } from "../incident/incident.service";
 import { dispatchAlert } from "../notifications/notifier";
 import { sendTlsExpiryAlert } from "../notifications/transactional";
+import { announceIncident } from "../status-pages/announcer";
 import { isInMaintenance } from "../../domain/maintenance/maintenance.checker";
 import { getCertificateExpiry } from "../../domain/diagnostics/tls-expiry.checker";
+import {
+  getQuorumStates,
+  resolveMonitorRegions,
+  saveRegionState,
+  type MonitorRegionState,
+} from "../regions/region.service";
+import { advanceRegionState, evaluateQuorum } from "./quorum";
 import type { MonitorWithPolicy } from "./monitor.types";
 
 const TLS_ALERT_THRESHOLDS = [7, 3, 1];
@@ -92,7 +100,20 @@ async function checkCertificateExpiry(monitor: MonitorWithPolicy): Promise<{
   return { expiresAt: expiryDate, alertedDays: [...alerted] };
 }
 
-export async function processMonitor(monitorId: number): Promise<void> {
+const EMPTY_STATE = {
+  status: "UNCONFIRMED" as const,
+  consecutive_failures: 0,
+  consecutive_successes: 0,
+};
+
+/**
+ * Run one check of `monitorId` from `region` and fold the result into both
+ * that region's state and the monitor's overall verdict.
+ */
+export async function processMonitor(
+  monitorId: number,
+  region = "default"
+): Promise<void> {
   const monitor = await getMonitorForCheck(monitorId);
 
   if (!monitor) {
@@ -107,6 +128,7 @@ export async function processMonitor(monitorId: number): Promise<void> {
 
   const policy = monitor.policy;
   const inMaintenance = await isInMaintenance(monitorId);
+  const regions = await resolveMonitorRegions(monitor.regions ?? []);
 
   const outcome = await runCheck({
     url: monitor.url,
@@ -122,14 +144,9 @@ export async function processMonitor(monitorId: number): Promise<void> {
   });
 
   // A SLOW verdict only counts against the monitor when the policy says to
-  // care. Otherwise it is recorded but treated as a success, which is the
-  // old behaviour.
-  const treatAsFailure =
-    outcome.status === "DOWN" || (outcome.status === "SLOW" && policy.alert_on_slow);
-
-  let failures = monitor.consecutive_failures;
-  let successes = monitor.consecutive_successes;
-  let confirmed = monitor.confirmed_status;
+  // care. Otherwise it is recorded but treated as a success.
+  const degraded = outcome.status === "SLOW" && policy.alert_on_slow;
+  const failed = outcome.status === "DOWN" || degraded;
 
   const context = {
     orgId: monitor.org_id,
@@ -138,41 +155,101 @@ export async function processMonitor(monitorId: number): Promise<void> {
     channelIds: monitor.channel_ids,
   };
 
+  let confirmed: MonitorWithPolicy["confirmed_status"] = monitor.confirmed_status;
+  let failures = monitor.consecutive_failures;
+  let successes = monitor.consecutive_successes;
+
   if (inMaintenance) {
     // Count nothing and alert on nothing; the window exists precisely so a
-    // planned deploy does not read as an outage.
+    // planned deploy does not read as an outage. The region's streaks reset
+    // so the first check afterwards starts from a clean slate.
+    confirmed = "MAINTENANCE";
     failures = 0;
     successes = 0;
-    confirmed = "MAINTENANCE";
-  } else if (treatAsFailure) {
-    failures += 1;
-    successes = 0;
 
-    const failureState = outcome.status === "SLOW" ? "DEGRADED" : "DOWN";
-    const alreadyFailing = confirmed === "DOWN" || confirmed === "DEGRADED";
+    await saveRegionState({
+      monitor_id: monitor.id,
+      region,
+      ...EMPTY_STATE,
+      last_checked_at: null,
+      last_root_cause: null,
+      last_detail: null,
+    });
+  } else {
+    const previous =
+      (await getQuorumStates(monitor.id, [region]))[0] ??
+      ({ ...EMPTY_STATE } as MonitorRegionState);
 
-    if (failures >= policy.failure_threshold && !alreadyFailing) {
-      confirmed = failureState;
+    const next = advanceRegionState(previous, failed, degraded, {
+      failureThreshold: policy.failure_threshold,
+      recoveryThreshold: policy.recovery_threshold,
+    });
 
+    await saveRegionState({
+      monitor_id: monitor.id,
+      region,
+      status: next.status,
+      consecutive_failures: next.consecutive_failures,
+      consecutive_successes: next.consecutive_successes,
+      last_checked_at: null,
+      last_root_cause: outcome.rootCause,
+      last_detail: outcome.detail,
+    });
+
+    const states = await getQuorumStates(monitor.id, regions);
+
+    const quorum = evaluateQuorum({
+      states,
+      regions,
+      confirmations: policy.confirmations,
+      current: monitor.confirmed_status,
+    });
+
+    const wasFailing =
+      monitor.confirmed_status === "DOWN" || monitor.confirmed_status === "DEGRADED";
+    const nowFailing = quorum.verdict === "DOWN" || quorum.verdict === "DEGRADED";
+
+    confirmed = quorum.verdict;
+    failures = nowFailing ? failures + 1 : 0;
+    successes = nowFailing ? 0 : successes + 1;
+
+    if (nowFailing && !wasFailing) {
       const incident = await openIncident(
         monitor.id,
         outcome.rootCause,
-        outcome.detail
+        outcome.detail,
+        quorum.failingRegions
       );
 
       if (!isMuted(monitor)) {
         await dispatchAlert({
           ...context,
-          type: failureState === "DEGRADED" ? "DEGRADED" : "DOWN",
-          headline: failureState === "DEGRADED" ? "Degraded" : "Down",
+          type: quorum.verdict === "DEGRADED" ? "DEGRADED" : "DOWN",
+          headline: quorum.verdict === "DEGRADED" ? "Degraded" : "Down",
           rootCause: outcome.rootCause,
-          detail: outcome.detail,
+          detail: describeRegions(outcome.detail, quorum.failingRegions, regions),
           incidentId: incident?.id ?? null,
         });
 
         if (incident) await markNotified(incident.id);
       }
-    } else if (alreadyFailing && policy.renotify_minutes !== null && !isMuted(monitor)) {
+
+      if (incident) await announceIncident(monitor.id, incident.id, "opened");
+    } else if (!nowFailing && wasFailing) {
+      const incident = await resolveIncident(monitor.id);
+
+      if (!isMuted(monitor)) {
+        await dispatchAlert({
+          ...context,
+          type: "UP",
+          headline: "Recovered",
+          incidentId: incident?.id ?? null,
+          durationSeconds: incident?.duration_seconds ?? null,
+        });
+      }
+
+      if (incident) await announceIncident(monitor.id, incident.id, "resolved");
+    } else if (nowFailing && policy.renotify_minutes !== null && !isMuted(monitor)) {
       // Still broken. Nag on the configured cadence so an unacknowledged
       // outage does not go quiet after the first message.
       const incident = await getOpenIncident(monitor.id);
@@ -190,37 +267,12 @@ export async function processMonitor(monitorId: number): Promise<void> {
           type: "REMINDER",
           headline: "Still down",
           rootCause: outcome.rootCause,
-          detail: outcome.detail,
+          detail: describeRegions(outcome.detail, quorum.failingRegions, regions),
           incidentId: incident.id,
         });
 
         await markNotified(incident.id);
       }
-    }
-  } else {
-    successes += 1;
-    failures = 0;
-
-    const wasFailing = confirmed === "DOWN" || confirmed === "DEGRADED";
-
-    if (wasFailing && successes >= policy.recovery_threshold) {
-      confirmed = "UP";
-
-      const incident = await resolveIncident(monitor.id);
-
-      if (!isMuted(monitor)) {
-        await dispatchAlert({
-          ...context,
-          type: "UP",
-          headline: "Recovered",
-          incidentId: incident?.id ?? null,
-          durationSeconds: incident?.duration_seconds ?? null,
-        });
-      }
-    } else if (confirmed === "UNCONFIRMED" || confirmed === "MAINTENANCE") {
-      // Leaving a maintenance window, or reporting for the first time.
-      confirmed = "UP";
-      await resolveIncident(monitor.id);
     }
   }
 
@@ -248,23 +300,17 @@ export async function processMonitor(monitorId: number): Promise<void> {
             tls_alerted_days = $6,
             in_maintenance = $7
       WHERE id = $1`,
-    [
-      monitor.id,
-      failures,
-      successes,
-      confirmed,
-      tlsExpiry,
-      tlsAlerted,
-      inMaintenance,
-    ]
+    [monitor.id, failures, successes, confirmed, tlsExpiry, tlsAlerted, inMaintenance]
   );
 
   await execute(
     `INSERT INTO probe_results
-       (monitor_id, dns, tcp, tls, ttfb, status, http_status_code, root_cause, failure_detail)
-     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
+       (monitor_id, region, dns, tcp, tls, ttfb, status, http_status_code,
+        root_cause, failure_detail)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)`,
     [
       monitor.id,
+      region,
       outcome.timings.dns,
       outcome.timings.tcp,
       outcome.timings.tls,
@@ -277,3 +323,19 @@ export async function processMonitor(monitorId: number): Promise<void> {
   );
 }
 
+/**
+ * "Failing from eu-west and us-east (2 of 3 regions)" is the difference
+ * between a routing problem and an outage, and it is the first thing anyone
+ * asks when the page fires.
+ */
+function describeRegions(
+  detail: string | null,
+  failingRegions: string[],
+  regions: string[]
+): string | null {
+  if (regions.length <= 1 || failingRegions.length === 0) return detail;
+
+  const summary = `Failing from ${failingRegions.join(", ")} (${failingRegions.length} of ${regions.length} regions)`;
+
+  return detail ? `${summary}. ${detail}` : summary;
+}

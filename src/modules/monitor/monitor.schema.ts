@@ -39,6 +39,8 @@ const baseMonitorFields = {
   timeout_ms: z.number().int().min(1000).max(60_000).default(10_000),
   follow_redirects: z.boolean().default(true),
   interval_seconds: z.number().int().min(30).max(3600).default(60),
+  // Empty means every enabled region.
+  regions: z.array(z.string().trim().min(1).max(40)).max(20).default([]),
   paused: z.boolean().default(false),
 };
 
@@ -72,6 +74,7 @@ export const alertPolicySchema = z.object({
   alert_on_slow: z.boolean().optional(),
   slow_threshold_ms: z.number().int().min(100).max(60_000).optional(),
   renotify_minutes: z.number().int().min(5).max(1440).nullable().optional(),
+  confirmations: z.number().int().min(1).max(10).optional(),
   muted_until: z.string().datetime({ offset: true }).nullable().optional(),
   channel_ids: z.array(z.number().int().positive()).max(20).optional(),
 });

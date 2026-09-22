@@ -1,11 +1,15 @@
 import { Response } from "express";
 import { AuthRequest } from "../auth/auth.middleware";
 import { getMonitor } from "../monitor/monitor.service";
+import { z } from "zod";
 import {
   acknowledgeIncident,
+  addIncidentUpdate,
   calculateUptime,
   getOpenIncident,
+  incidentBelongsToOrg,
   listIncidents,
+  listIncidentUpdates,
   listOrgIncidents,
 } from "./incident.service";
 
@@ -87,4 +91,49 @@ export async function acknowledgeHandler(req: AuthRequest, res: Response) {
   }
 
   res.json({ message: "Incident acknowledged", incident });
+}
+
+const updateSchema = z.object({
+  status: z.enum(["investigating", "identified", "monitoring", "resolved"]),
+  body: z.string().trim().min(1).max(4000),
+  /** Public updates appear on any status page carrying this monitor. */
+  is_public: z.boolean().default(true),
+});
+
+export async function listUpdatesHandler(req: AuthRequest, res: Response) {
+  const incidentId = Number(req.params.incidentId);
+
+  if (!Number.isInteger(incidentId)) {
+    return res.status(400).json({ error: "Invalid incident id" });
+  }
+
+  if (!(await incidentBelongsToOrg(req.orgId!, incidentId))) {
+    return res.status(404).json({ error: "Incident not found" });
+  }
+
+  res.json({ updates: await listIncidentUpdates(incidentId) });
+}
+
+export async function addUpdateHandler(req: AuthRequest, res: Response) {
+  const incidentId = Number(req.params.incidentId);
+
+  if (!Number.isInteger(incidentId)) {
+    return res.status(400).json({ error: "Invalid incident id" });
+  }
+
+  const parsed = updateSchema.safeParse(req.body);
+
+  if (!parsed.success) {
+    return res
+      .status(400)
+      .json({ error: parsed.error.issues[0]?.message ?? "Invalid update" });
+  }
+
+  if (!(await incidentBelongsToOrg(req.orgId!, incidentId))) {
+    return res.status(404).json({ error: "Incident not found" });
+  }
+
+  const update = await addIncidentUpdate(incidentId, req.user!.id, parsed.data);
+
+  res.status(201).json({ update });
 }
