@@ -31,7 +31,10 @@ import {
   assertWithinQuota,
   QuotaExceededError,
 } from "../billing/quota";
-import { resolveMonitorRegions } from "../regions/region.service";
+import {
+  listRegionStatesForMonitor,
+  resolveMonitorRegions,
+} from "../regions/region.service";
 
 /** Loads the monitor and 404s if it isn't in the caller's organization. */
 async function requireMonitor(req: AuthRequest, res: Response) {
@@ -105,6 +108,10 @@ export async function getMonitorHandler(req: AuthRequest, res: Response) {
     ...monitor,
     policy: await getPolicy(monitor.id),
     channel_ids: await getMonitorChannelIds(monitor.id),
+    // Where it is being checked from, and what each vantage point sees. A
+    // single-region failure never reaches confirmed_status, so this is the
+    // only place it is visible.
+    region_states: await listRegionStatesForMonitor(monitor.id),
   });
 }
 
