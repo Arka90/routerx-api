@@ -18,7 +18,7 @@ REGION_NAME="EU (Frankfurt)"
 ```
 
 It needs to reach Postgres and Redis, and nothing else. On startup it
-registers `eu-west`, then consumes only `monitor-check:eu-west`.
+registers `eu-west`, then consumes only `monitor-check-eu-west`.
 
 The API fans monitors out to every enabled region on its next boot, and
 `upsertJobScheduler` is idempotent, so an API restart is how existing monitors
