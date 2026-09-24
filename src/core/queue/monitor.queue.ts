@@ -5,9 +5,12 @@ import { connectionOptions } from "./redis";
  * One queue per region. BullMQ workers cannot filter by job payload, so the
  * only way a worker in eu-west consumes exclusively eu-west checks is for the
  * region to be part of the queue name.
+ *
+ * Joined with `-`, not `:` — BullMQ uses `:` as its Redis key separator and
+ * refuses to construct a Queue or Worker whose name contains one.
  */
 export function monitorQueueName(region: string): string {
-  return `monitor-check:${region}`;
+  return `monitor-check-${region}`;
 }
 
 const queues = new Map<string, Queue>();
